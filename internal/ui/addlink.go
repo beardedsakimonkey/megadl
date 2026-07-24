@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"megadl/internal/db"
 	"megadl/internal/mega"
@@ -22,11 +23,17 @@ type addlinkState int
 
 const (
 	stateURL addlinkState = iota
+	stateDecoding
 	stateListing
 	statePicker
 	stateName
 	stateExisting
 	stateFailed
+)
+
+const (
+	decodeFrames        = 28
+	decodeFrameInterval = 40 * time.Millisecond
 )
 
 var reFileLink = regexp.MustCompile(`(?i)mega(\.co)?\.nz/(#!|file/)`)
@@ -36,6 +43,12 @@ type listResultMsg struct {
 	url   string
 	nodes []mega.Node
 	err   error
+}
+
+// decodeFrameMsg advances the decode animation; seq discards ticks from a
+// cancelled or restarted animation.
+type decodeFrameMsg struct {
+	seq int
 }
 
 type addlinkModel struct {
@@ -56,6 +69,11 @@ type addlinkModel struct {
 	picker   pickerModel
 	existing *db.Download
 	errMsg   string
+
+	decodeSrc    string // base64 text as pasted
+	decodeTarget string // decoded mega.nz link
+	decodeFrame  int
+	decodeSeq    int
 }
 
 func newAddlinkModel(app *App) *addlinkModel {
@@ -113,6 +131,7 @@ func (m *addlinkModel) previousURL() {
 	m.urlInput.SetValue(m.linkHistory[m.historyIndex])
 	m.urlInput.CursorEnd()
 	m.errMsg = ""
+	m.refreshLinkHint()
 }
 
 func (m *addlinkModel) nextURL() {
@@ -128,6 +147,52 @@ func (m *addlinkModel) nextURL() {
 	}
 	m.urlInput.CursorEnd()
 	m.errMsg = ""
+	m.refreshLinkHint()
+}
+
+// urlInputView pads the input line to its filled-in width: bubbles renders
+// the placeholder Width cells wide but a value prompt+Width+1, so the dialog
+// would otherwise widen the moment the input gets content.
+func (m *addlinkModel) urlInputView() string {
+	view := m.urlInput.View()
+	w := lipgloss.Width(m.urlInput.PromptStyle.Render(m.urlInput.Prompt)) + m.urlInput.Width + 1
+	if pad := w - lipgloss.Width(view); pad > 0 {
+		view += strings.Repeat(" ", pad)
+	}
+	return view
+}
+
+// refreshLinkHint colors the input orange while it holds something enter can
+// act on: a valid mega link, or base64 that decodes to one.
+func (m *addlinkModel) refreshLinkHint() {
+	url := strings.TrimSpace(m.urlInput.Value())
+	actionable := reFileLink.MatchString(url) || reFolderLink.MatchString(url)
+	if !actionable {
+		_, actionable = decodeBase64MegaLink(url)
+	}
+	if actionable {
+		m.urlInput.TextStyle = styleDecode
+	} else {
+		m.urlInput.TextStyle = lipgloss.NewStyle()
+	}
+}
+
+func (m *addlinkModel) decodeTickCmd() tea.Cmd {
+	seq := m.decodeSeq
+	return tea.Tick(decodeFrameInterval, func(time.Time) tea.Msg {
+		return decodeFrameMsg{seq: seq}
+	})
+}
+
+// finishDecode ends the animation and hands the decoded link back to the URL
+// prompt so it can be reviewed before listing.
+func (m *addlinkModel) finishDecode() tea.Cmd {
+	m.decodeSeq++
+	m.state = stateURL
+	m.urlInput.SetValue(m.decodeTarget)
+	m.urlInput.CursorEnd()
+	m.refreshLinkHint()
+	return textinput.Blink
 }
 
 func (m *addlinkModel) listCmd(url string) tea.Cmd {
@@ -171,6 +236,16 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 		}
 		return m, m.enterNameState()
 
+	case decodeFrameMsg:
+		if m.state != stateDecoding || msg.seq != m.decodeSeq {
+			return m, nil
+		}
+		m.decodeFrame++
+		if m.decodeFrame >= decodeFrames {
+			return m, m.finishDecode()
+		}
+		return m, m.decodeTickCmd()
+
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
@@ -206,6 +281,15 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 			case reFolderLink.MatchString(url):
 				m.linkType = "folder"
 			default:
+				if decoded, ok := decodeBase64MegaLink(url); ok {
+					m.decodeSrc = url
+					m.decodeTarget = decoded
+					m.errMsg = ""
+					m.state = stateDecoding
+					m.decodeSeq++
+					m.decodeFrame = 0
+					return m, m.decodeTickCmd()
+				}
 				m.errMsg = "that doesn't look like a mega.nz file or folder link"
 				return m, nil
 			}
@@ -216,7 +300,14 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.urlInput, cmd = m.urlInput.Update(key)
+		m.refreshLinkHint()
 		return m, cmd
+
+	case stateDecoding:
+		// esc skips the reveal; everything else waits it out
+		if key.String() == "esc" {
+			return m, m.finishDecode()
+		}
 
 	case stateListing:
 		if key.String() == "esc" {
@@ -431,6 +522,8 @@ func (m *addlinkModel) help() string {
 			shortcut{keys: []string{"enter"}, label: "list link"},
 			shortcut{keys: []string{"esc"}, label: "cancel"},
 		)
+	case stateDecoding:
+		return renderShortcuts(shortcut{keys: []string{"esc"}, label: "skip"})
 	case stateListing:
 		return renderShortcuts(shortcut{keys: []string{"esc"}, label: "cancel"})
 	case statePicker:
@@ -459,10 +552,18 @@ func (m *addlinkModel) view() string {
 	var body string
 	switch m.state {
 	case stateURL:
-		body = styleTitle.Render("Add mega.nz link") + "\n\n" + m.urlInput.View()
+		body = styleTitle.Render("Add mega.nz link") + "\n\n" + m.urlInputView()
 		if m.errMsg != "" {
 			body += "\n\n" + styleError.Render(m.errMsg)
 		}
+	case stateDecoding:
+		// the animation stands in for the input's value: same title and
+		// prompt, padded to the input's rendered width so nothing shifts
+		prompt := m.urlInput.PromptStyle.Render(m.urlInput.Prompt)
+		width := m.urlInput.Width + 1
+		frame := m.decodeFrameView(width)
+		body = styleTitle.Render("Add mega.nz link") + "\n\n" +
+			prompt + lipgloss.NewStyle().Width(width).Render(frame)
 	case stateListing:
 		body = styleTitle.Render("Add mega.nz link") + "\n\n" +
 			m.spin.View() + " fetching listing…\n" + styleDim.Render(truncateMiddle(m.url, 70))
@@ -498,4 +599,12 @@ func (m *addlinkModel) view() string {
 			styleDim.Render("press any key to edit the link, esc to close")
 	}
 	return styleModal.Render(body)
+}
+
+func (m *addlinkModel) decodeFrameView(width int) string {
+	frame := truncate(
+		decodeAnimFrame(m.decodeSrc, m.decodeTarget, m.decodeFrame, decodeFrames),
+		width,
+	)
+	return styleDecode.Render(frame)
 }

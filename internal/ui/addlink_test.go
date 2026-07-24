@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"encoding/base64"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"megadl/internal/config"
 	"megadl/internal/db"
@@ -130,6 +132,130 @@ func TestEnqueueRejectsResourceAddedAfterListing(t *testing.T) {
 	rows, err := database.Downloads()
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("downloads after enqueue = %+v, %v", rows, err)
+	}
+}
+
+func TestDecodeBase64MegaLink(t *testing.T) {
+	link := "https://mega.nz/folder/AAAAAAAA#0123456789abcdefghijkl"
+	once := base64.StdEncoding.EncodeToString([]byte(link))
+	tests := []struct {
+		name  string
+		input string
+		want  string
+		ok    bool
+	}{
+		{"single std", once, link, true},
+		{"single raw url-safe", base64.RawURLEncoding.EncodeToString([]byte(link)), link, true},
+		{"double encoded", base64.StdEncoding.EncodeToString([]byte(once)), link, true},
+		{"wrapped paste", once[:20] + "\n " + once[20:], link, true},
+		{"decoded padding trimmed", base64.StdEncoding.EncodeToString([]byte("  " + link + "\n")), link, true},
+		{"plain link", link, "", false},
+		{"free text", "not a link at all", "", false},
+		{"base64 of garbage", base64.StdEncoding.EncodeToString([]byte("some perfectly ordinary text")), "", false},
+		{"empty", "", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := decodeBase64MegaLink(tt.input)
+		if ok != tt.ok || got != tt.want {
+			t.Errorf("%s: decodeBase64MegaLink(%q) = %q, %v; want %q, %v",
+				tt.name, tt.input, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestAddlinkDecodesBase64LinkAndAnimatesReveal(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	link := "https://mega.nz/file/BBBBBBBB#0123456789abcdefghijkl"
+	encoded := base64.StdEncoding.EncodeToString([]byte(link))
+
+	m := newAddlinkModel(app)
+	m.urlInput.SetValue(encoded)
+	_, cmd := m.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.state != stateDecoding || m.decodeTarget != link || cmd == nil {
+		t.Fatalf("after submit: state=%v target=%q cmd=%v", m.state, m.decodeTarget, cmd)
+	}
+
+	// run the animation to completion
+	for i := 0; i < decodeFrames && m.state == stateDecoding; i++ {
+		m.update(decodeFrameMsg{seq: m.decodeSeq})
+	}
+	if m.state != stateURL || m.urlInput.Value() != link {
+		t.Fatalf("after animation: state=%v input=%q", m.state, m.urlInput.Value())
+	}
+	if got := m.urlInput.TextStyle.GetForeground(); got != colorOrange {
+		t.Fatalf("decoded link should stay orange, got %v", got)
+	}
+
+	// stale frames from the finished animation are ignored
+	m.update(decodeFrameMsg{seq: m.decodeSeq - 1})
+	if m.state != stateURL || m.urlInput.Value() != link {
+		t.Fatalf("after stale frame: state=%v input=%q", m.state, m.urlInput.Value())
+	}
+}
+
+func TestAddlinkColorsBase64InputOrange(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	link := "https://mega.nz/file/EEEEEEEE#0123456789abcdefghijkl"
+	encoded := base64.StdEncoding.EncodeToString([]byte(link))
+
+	m := newAddlinkModel(app)
+	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(encoded)})
+	if got := m.urlInput.TextStyle.GetForeground(); got != colorOrange {
+		t.Fatalf("foreground after paste = %v, want %v", got, colorOrange)
+	}
+
+	// breaking the base64 clears the hint
+	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if got := m.urlInput.TextStyle.GetForeground(); got == colorOrange {
+		t.Fatalf("foreground after edit = %v, want default", got)
+	}
+
+	// plain mega links are orange too
+	m = newAddlinkModel(app)
+	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(link)})
+	if got := m.urlInput.TextStyle.GetForeground(); got != colorOrange {
+		t.Fatalf("foreground after link paste = %v, want %v", got, colorOrange)
+	}
+}
+
+func TestAddlinkDecodeAnimationKeepsDialogWidthStable(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	link := "https://mega.nz/file/DDDDDDDD#0123456789abcdefghijkl"
+	encoded := base64.StdEncoding.EncodeToString([]byte(link))
+
+	m := newAddlinkModel(app)
+	want := lipgloss.Width(m.view()) // empty input showing the placeholder
+
+	m.urlInput.SetValue(encoded)
+	if got := lipgloss.Width(m.view()); got != want {
+		t.Fatalf("after paste: dialog width = %d, want %d", got, want)
+	}
+
+	m.decodeSrc, m.decodeTarget = encoded, link
+	m.state = stateDecoding
+	for m.decodeFrame = 0; m.decodeFrame <= decodeFrames; m.decodeFrame++ {
+		if got := lipgloss.Width(m.view()); got != want {
+			t.Fatalf("frame %d: dialog width = %d, want %d", m.decodeFrame, got, want)
+		}
+	}
+}
+
+func TestAddlinkEscSkipsDecodeAnimation(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	link := "https://mega.nz/folder/CCCCCCCC#0123456789abcdefghijkl"
+	// double-encoded still resolves to the plain link
+	encoded := base64.StdEncoding.EncodeToString(
+		[]byte(base64.StdEncoding.EncodeToString([]byte(link))))
+
+	m := newAddlinkModel(app)
+	m.urlInput.SetValue(encoded)
+	m.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.state != stateDecoding || m.decodeTarget != link {
+		t.Fatalf("after submit: state=%v target=%q", m.state, m.decodeTarget)
+	}
+	m.updateKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.state != stateURL || m.urlInput.Value() != link {
+		t.Fatalf("after skip: state=%v input=%q", m.state, m.urlInput.Value())
 	}
 }
 
