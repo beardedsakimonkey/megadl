@@ -223,6 +223,10 @@ func (e *Engine) consume(a *active) {
 				if delta := ev.Done - a.sessionDone; delta > 0 {
 					e.pending += delta
 					a.rate.add(delta)
+					// Bytes are landing again, so the stall is over: the
+					// banner — and the pause finish would impose — describe a
+					// throttle that is current, not one a retry already got past.
+					a.quotaStalled = false
 				}
 				// regression = chunk retry; re-fetched bytes count as
 				// they stream in again, so just re-baseline

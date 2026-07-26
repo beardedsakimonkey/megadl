@@ -925,6 +925,79 @@ func TestEscDismissesQuotaBanner(t *testing.T) {
 	}
 }
 
+// pushDriver hands the running proc back to the test, so the test decides when
+// the stall it reported ends.
+type pushDriver struct{ proc *pushProc }
+
+func (pushDriver) List(context.Context, string) ([]mega.Node, error) { return nil, nil }
+
+func (d pushDriver) Start(context.Context, mega.DownloadArgs) (mega.Proc, error) {
+	return d.proc, nil
+}
+
+type pushProc struct {
+	events   chan mega.Event
+	stopOnce sync.Once
+}
+
+func (p *pushProc) Events() <-chan mega.Event { return p.events }
+
+// Stop exits from a goroutine: the engine calls it holding its lock, which the
+// event pump needs before it can take the exit off the channel.
+func (p *pushProc) Stop() {
+	p.stopOnce.Do(func() {
+		go func() {
+			p.events <- mega.ExitEvent{}
+			close(p.events)
+		}()
+	})
+}
+
+func waitStall(t *testing.T, eng *engine.Engine, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for eng.Snapshot().QuotaStalled != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("engine quota stall = %v, want %v", !want, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// The banner describes a stall that is happening now, so bytes landing again
+// take it off screen — and take the esc dismissal with it, since the next stall
+// is news the user has not seen.
+func TestQuotaBannerClearsWhenBytesResume(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+	proc := &pushProc{events: make(chan mega.Event, 8)}
+	app.eng = engine.New(pushDriver{proc}, database)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go app.eng.Run(ctx)
+	app.eng.Kick()
+	t.Cleanup(func() { app.eng.Dequeue(id) })
+
+	m := &app.downloads
+	proc.events <- mega.FileStartEvent{Path: "/dl/Folder/a", Remote: "/Folder/a", Size: 100}
+	proc.events <- mega.QuotaEvent{Line: "Server returned 509 (over quota)"}
+	waitStall(t, app.eng, true)
+	m.update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	proc.events <- mega.ProgressEvent{Done: -1, Total: 100}
+	proc.events <- mega.ProgressEvent{Done: 40, Total: 100}
+	waitStall(t, app.eng, false)
+	m.reload()
+	if strings.Contains(m.detailView(80), "QUOTA") {
+		t.Fatal("banner is still up after the download resumed")
+	}
+
+	proc.events <- mega.QuotaEvent{Line: "Server returned 509 (over quota)"}
+	waitStall(t, app.eng, true)
+	if !strings.Contains(m.detailView(80), "QUOTA") {
+		t.Fatal("a fresh stall stayed hidden behind the earlier dismissal")
+	}
+}
+
 func TestToggleLabelFollowsSelection(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	m := &app.downloads

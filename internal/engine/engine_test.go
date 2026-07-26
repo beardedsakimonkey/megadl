@@ -387,6 +387,42 @@ func TestEngineQuotaPausesTheQueue(t *testing.T) {
 	}
 }
 
+// A 509 the driver's own retry gets past is not a stall any more: the banner
+// has to go out once bytes land again, and the run must finish normally rather
+// than parking the queue on a throttle that already lifted.
+func TestEngineQuotaClearsWhenBytesResume(t *testing.T) {
+	drv := newFakeDriver(driverRun{
+		events: []mega.Event{
+			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+			mega.ProgressEvent{Done: -1, Total: 100},
+			mega.QuotaEvent{Line: "Server returned 509 (over quota)"},
+			mega.ProgressEvent{Done: 40, Total: 100},
+		},
+		waitForStop: true,
+	})
+
+	d := testDB(t)
+	id := insertDownload(t, d)
+
+	eng := New(drv, d)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eng.Run(ctx)
+	eng.Kick()
+	waitActive(t, eng, id)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for eng.Snapshot().QuotaStalled || eng.Snapshot().FileDone == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("snapshot still stalled after bytes resumed: %+v", eng.Snapshot())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if eng.Paused() {
+		t.Fatal("a stall that cleared must not pause the queue")
+	}
+}
+
 func TestEngineDequeueFileRestartsWithReducedSelection(t *testing.T) {
 	// First run starts a.mkv and waits; stopping that file must restart
 	// the native driver with only h2 selected. Second run finishes.

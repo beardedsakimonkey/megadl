@@ -56,11 +56,11 @@ type downloadsModel struct {
 	confirmRemove bool // pending x confirmation for rows[cursor]
 	refreshing    bool // remote listing fetch in flight
 	notice        string
-	// quotaDismissed is the download whose quota banner esc hid. The engine
-	// keeps reporting the stall for the rest of that download's run, so
-	// hiding has to be remembered; a stall under any other download is news
-	// again and speaks up.
-	quotaDismissed int64
+	// quotaDismissed remembers that esc hid the quota banner. It covers the
+	// one stall that was showing then: the engine keeps reporting a stall
+	// until bytes move again, and once they do the next stall is news and
+	// speaks up. reload clears it.
+	quotaDismissed bool
 
 	// Pane geometry recorded by view so mouse events can be mapped back
 	// onto rows; coordinates are relative to the top-left of the body.
@@ -123,6 +123,11 @@ func (m *downloadsModel) reload() {
 	}
 	if m.cursor >= len(m.rows) {
 		m.cursor = max(0, len(m.rows)-1)
+	}
+	if m.app.eng != nil && !m.app.eng.Snapshot().QuotaStalled {
+		// nothing is being throttled any more, so there is no dismissal left
+		// to honour; the banner is already gone on its own
+		m.quotaDismissed = false
 	}
 	m.loadFiles()
 }
@@ -355,8 +360,8 @@ func (m *downloadsModel) dismissDetail() {
 	if m.app == nil || m.app.eng == nil {
 		return
 	}
-	if snap := m.app.eng.Snapshot(); snap.QuotaStalled {
-		m.quotaDismissed = snap.ActiveID
+	if m.app.eng.Snapshot().QuotaStalled {
+		m.quotaDismissed = true
 	}
 }
 
@@ -1146,7 +1151,7 @@ func (m *downloadsModel) detailView(width int) string {
 	var lines []string
 	snap := m.app.eng.Snapshot()
 
-	if snap.QuotaStalled && m.quotaDismissed != snap.ActiveID {
+	if snap.QuotaStalled && !m.quotaDismissed {
 		lines = append(lines, " "+styleError.Render("QUOTA — mega is throttling, retrying"))
 	}
 
