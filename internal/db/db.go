@@ -54,13 +54,10 @@ CREATE TABLE IF NOT EXISTS transfer_log (
 CREATE INDEX IF NOT EXISTS idx_transfer_ts ON transfer_log(ts);
 
 -- Single row (id = 1) holding view state that outlives the process. The
--- foreign keys clear the selection and the statusbar's file when the rows they
--- point at are removed. Only the statusbar's file is stored, never how far it
--- got: the strip is rebuilt from the file row and the partial on disk.
+-- foreign key clears the selection when the download it points at is removed.
 CREATE TABLE IF NOT EXISTS ui_state (
   id                   INTEGER PRIMARY KEY CHECK (id = 1),
-  selected_download_id INTEGER REFERENCES downloads(id) ON DELETE SET NULL,
-  statusbar_file_id    INTEGER REFERENCES download_files(id) ON DELETE SET NULL
+  selected_download_id INTEGER REFERENCES downloads(id) ON DELETE SET NULL
 );
 
 -- Single row (id = 1) holding queue state. Pausing belongs to the queue as a
@@ -137,12 +134,19 @@ func Open(path string) (*DB, error) {
 		h.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	// The wanted flag became queue membership. A missing column means the
-	// rename already happened, or the schema above just created queued.
-	if _, err := h.Exec(`ALTER TABLE download_files RENAME COLUMN wanted TO queued`); err != nil &&
-		!strings.Contains(err.Error(), "no such column") {
-		h.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
+	// Columns dropped after the fact; a missing one means this database never
+	// had it, or the schema above just created the table without it.
+	//   - wanted became queue membership, renamed to queued.
+	//   - the statusbar strip follows the queue now, so the file it used to
+	//     remember across sessions is no longer recorded.
+	for _, stmt := range []string{
+		`ALTER TABLE download_files RENAME COLUMN wanted TO queued`,
+		`ALTER TABLE ui_state DROP COLUMN statusbar_file_id`,
+	} {
+		if _, err := h.Exec(stmt); err != nil && !strings.Contains(err.Error(), "no such column") {
+			h.Close()
+			return nil, fmt.Errorf("migrate: %w", err)
+		}
 	}
 	// Columns added after the fact; fresh databases already have them from the
 	// schema above, so a duplicate-column error means "already migrated". The
@@ -152,8 +156,6 @@ func Open(path string) (*DB, error) {
 		`ALTER TABLE downloads ADD COLUMN selected_file_id INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE downloads ADD COLUMN queued_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE download_files ADD COLUMN queued INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE ui_state ADD COLUMN statusbar_file_id INTEGER
-			REFERENCES download_files(id) ON DELETE SET NULL`,
 	} {
 		if _, err := h.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			h.Close()
@@ -485,31 +487,6 @@ func (d *DB) SelectedDownload() (int64, error) {
 	return id.Int64, err
 }
 
-// SetStatusbarFile records the file the statusbar strip is drawing, so the
-// next session opens on the same transfer instead of an empty footer; 0 clears
-// it. The file's own row says how far it got, so nothing about its progress is
-// stored.
-func (d *DB) SetStatusbarFile(fileID int64) error {
-	var id any
-	if fileID != 0 {
-		id = fileID
-	}
-	_, err := d.sql.Exec(`INSERT INTO ui_state (id, statusbar_file_id) VALUES (1, ?)
-		ON CONFLICT(id) DO UPDATE SET statusbar_file_id = excluded.statusbar_file_id`, id)
-	return err
-}
-
-// StatusbarFile returns the file recorded by SetStatusbarFile, or 0 when there
-// is none — including when its download has since been removed.
-func (d *DB) StatusbarFile() (int64, error) {
-	var id sql.NullInt64
-	err := d.sql.QueryRow(`SELECT statusbar_file_id FROM ui_state WHERE id = 1`).Scan(&id)
-	if err == sql.ErrNoRows {
-		return 0, nil
-	}
-	return id.Int64, err
-}
-
 // SetSelectedFile records the file the TUI file pane is highlighting inside a
 // download; 0 clears it.
 func (d *DB) SetSelectedFile(downloadID, fileID int64) error {
@@ -576,23 +553,6 @@ func (d *DB) File(id int64) (*File, error) {
 	err := d.sql.QueryRow(`SELECT `+fileCols+` FROM download_files WHERE id = ?`, id).
 		Scan(&f.ID, &f.DownloadID, &f.NodeHandle, &f.RemotePath,
 			&f.LocalPath, &f.Size, &f.Status, &f.Queued)
-	if err != nil {
-		return nil, err
-	}
-	return &f, nil
-}
-
-// FileByLocalPath returns the file a download writes to localPath, or nil when
-// it has none. It is how a path reported by the engine becomes a file row.
-func (d *DB) FileByLocalPath(downloadID int64, localPath string) (*File, error) {
-	var f File
-	err := d.sql.QueryRow(`SELECT `+fileCols+` FROM download_files
-		WHERE download_id = ? AND local_path = ?`, downloadID, localPath).
-		Scan(&f.ID, &f.DownloadID, &f.NodeHandle, &f.RemotePath,
-			&f.LocalPath, &f.Size, &f.Status, &f.Queued)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
 	if err != nil {
 		return nil, err
 	}

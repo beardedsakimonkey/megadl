@@ -116,111 +116,10 @@ func TestStatusbarEmptyWhenIdle(t *testing.T) {
 	}
 }
 
-// finishedBar and unfinishedBar are the two shapes the held strip is tested
-// against: a download whose folder is entirely on disk, and one that only got
-// part of the way there.
-func finishedBar() *App {
-	return heldBarApp(db.StatusDone, db.FileCount{Total: 1, Landed: 1})
-}
-
-func unfinishedBar() *App {
-	return heldBarApp(db.StatusPending, db.FileCount{Total: 2, Landed: 1})
-}
-
-// heldBarApp is an app whose engine is idle but which drew a transfer for
-// download 3 a moment ago. counts says how much of that download is on disk,
-// which is what the marker on its row — and so on the held strip — comes from.
-func heldBarApp(status string, counts db.FileCount) *App {
-	app := &App{width: 100, eng: engine.New(nil, nil)}
-	app.downloads = newDownloadsModel(app)
-	app.downloads.rows = []*db.Download{{ID: 3, Name: "Skins", Status: status, DoneBytes: 100}}
-	app.downloads.fileCounts = map[int64]db.FileCount{3: counts}
-	app.lastBar = engine.Snapshot{
-		ActiveID:    3,
-		CurrentFile: "episode-01.mkv",
-		FileSize:    100,
-		FileDone:    100,
-		Rate:        2 << 20,
-	}
-	return app
-}
-
-func TestStatusbarHoldsLastTransferOnceTheEngineGoesIdle(t *testing.T) {
-	app := finishedBar()
-
-	got := ansi.Strip(app.statusbarView())
-	for _, want := range []string{"✓ episode-01.mkv", "100%", "100 / 100 B"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("held statusbar = %q, want %q", got, want)
-		}
-	}
-	// the transfer is over, so the last measured rate must not linger
-	if strings.Contains(got, "/s") {
-		t.Fatalf("held statusbar = %q, want no rate", got)
-	}
-	if !strings.Contains(app.footerView(), app.statusbarView()) {
-		t.Fatal("footer should carry the held statusbar")
-	}
-}
-
-// The engine usually finishes between renders, so the frame the strip is
-// holding stops a chunk short of the file size. A finished download reads as
-// finished anyway: a full bar beside 100%, not 19 of 20 cells beside "100%".
-func TestStatusbarCompletesHeldBarForFinishedDownload(t *testing.T) {
-	app := finishedBar()
-	app.lastBar.FileDone = 9_990
-	app.lastBar.FileSize = 10_000
-
-	got := ansi.Strip(app.statusbarView())
-	if !strings.Contains(got, "100%") {
-		t.Fatalf("held statusbar = %q, want 100%%", got)
-	}
-	if strings.Contains(got, "░") {
-		t.Fatalf("held statusbar = %q, want a full bar", got)
-	}
-}
-
-// An unfinished download's strip is left where the transfer really stopped.
-func TestStatusbarKeepsHeldBarShortForUnfinishedDownload(t *testing.T) {
-	app := unfinishedBar()
-	app.lastBar.FileDone = 9_990
-	app.lastBar.FileSize = 10_000
-
-	got := ansi.Strip(app.statusbarView())
-	if !strings.Contains(got, "99%") {
-		t.Fatalf("held statusbar = %q, want 99%%", got)
-	}
-	if !strings.Contains(got, "░") {
-		t.Fatalf("held statusbar = %q, want an unfilled cell", got)
-	}
-}
-
-// An unfinished download keeps its strip too, wearing the same marker its row
-// does — here the partial one, since only part of the folder is on disk.
-func TestStatusbarHoldsUnfinishedTransfer(t *testing.T) {
-	app := unfinishedBar()
-
-	if got := ansi.Strip(app.statusbarView()); !strings.Contains(got, partialGlyph+" episode-01.mkv") {
-		t.Fatalf("held statusbar = %q, want marker %q", got, partialGlyph)
-	}
-}
-
-func TestStatusbarDropsHeldTransferWhenItsDownloadIsRemoved(t *testing.T) {
-	app := finishedBar()
-	app.downloads.rows = nil
-
-	if got := app.statusbarView(); got != "" {
-		t.Fatalf("statusbar = %q, want empty after the download left the list", got)
-	}
-	if app.lastBar.CurrentFile != "" {
-		t.Fatalf("held snapshot = %+v, want cleared", app.lastBar)
-	}
-}
-
-// barSessionApp is an app over a real database holding one download of a
-// single file, as a previous session would have left it: the strip it drew
-// last is recorded, and the file is in the given state.
-func barSessionApp(t *testing.T, status string, partial int64) (*App, *db.DB, db.File) {
+// queueBarApp is an app over a real database whose queue holds one folder
+// download of two waiting files, with partial bytes of the first already on
+// disk. Its engine is idle, so the strip has to come from the queue.
+func queueBarApp(t *testing.T, partial int64) (*App, *db.DB, []db.File) {
 	t.Helper()
 	app, database := openAddlinkTestApp(t)
 	app.width = 100
@@ -231,25 +130,24 @@ func barSessionApp(t *testing.T, status string, partial int64) (*App, *db.DB, db
 	}
 	id, err := database.InsertDownload(&db.Download{
 		URL: "u", Handle: "h", LinkType: "folder", Name: "Skins", DestPath: dest,
-	}, []db.File{{
-		NodeHandle: "h1",
-		RemotePath: "/Skins/episode-01.mkv",
-		LocalPath:  filepath.Join(dest, "episode-01.mkv"),
-		Size:       100,
-		Queued:     true,
-	}})
+	}, []db.File{
+		{
+			NodeHandle: "h1",
+			RemotePath: "/Skins/episode-01.mkv",
+			LocalPath:  filepath.Join(dest, "episode-01.mkv"),
+			Size:       100,
+			Queued:     true,
+		},
+		{
+			NodeHandle: "h2",
+			RemotePath: "/Skins/episode-02.mkv",
+			LocalPath:  filepath.Join(dest, "episode-02.mkv"),
+			Size:       100,
+			Queued:     true,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if status != db.FilePending {
-		if err := database.SetFileStatusByHandle(id, "h1", status); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if status == db.FileDone {
-		if err := database.MarkCompleted(id, db.StatusDone); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if partial > 0 {
 		tmp := filepath.Join(dest, ".megatmp.h1")
@@ -261,91 +159,90 @@ func barSessionApp(t *testing.T, status string, partial int64) (*App, *db.DB, db
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.SetStatusbarFile(files[0].ID); err != nil {
+	app.downloads.reload()
+	return app, database, files
+}
+
+// With nothing being fetched, the strip describes the file the queue will pick
+// up next, sitting where its partial on disk left it.
+func TestStatusbarShowsQueueHeadWaiting(t *testing.T) {
+	app, _, _ := queueBarApp(t, 40)
+
+	got := ansi.Strip(app.statusbarView())
+	for _, want := range []string{queuedGlyph + " episode-01.mkv", " 40%", "40 / 100 B"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("statusbar = %q, want %q", got, want)
+		}
+	}
+	// nothing is moving, so no rate may be quoted
+	if strings.Contains(got, "/s") {
+		t.Fatalf("statusbar = %q, want no rate", got)
+	}
+	if !strings.Contains(app.footerView(), app.statusbarView()) {
+		t.Fatal("footer should carry the statusbar")
+	}
+}
+
+// A held queue is holding at its head file, and the strip wears the same marker
+// that file's row in the pane does.
+func TestStatusbarMarksHeldQueueHead(t *testing.T) {
+	app, _, _ := queueBarApp(t, 40)
+	app.eng.SetPaused(true)
+
+	got := ansi.Strip(app.statusbarView())
+	if !strings.Contains(got, pausedGlyph+" episode-01.mkv") {
+		t.Fatalf("statusbar = %q, want marker %q", got, pausedGlyph)
+	}
+}
+
+// The strip follows the queue rather than the last thing fetched, so it moves
+// on to the next waiting file as soon as one lands.
+func TestStatusbarFollowsQueuePastAFinishedFile(t *testing.T) {
+	app, database, files := queueBarApp(t, 40)
+	if err := database.SetFileStatusByHandle(files[0].DownloadID, "h1", db.FileDone); err != nil {
 		t.Fatal(err)
 	}
 	app.downloads.reload()
-	return app, database, files[0]
-}
-
-// Quitting must not empty the footer: the next session opens on the same
-// transfer, drawn from the file row rather than from anything it stored.
-func TestStatusbarRestoresLastSessionsFinishedTransfer(t *testing.T) {
-	app, _, _ := barSessionApp(t, db.FileDone, 0)
-
-	app.restoreBar()
 
 	got := ansi.Strip(app.statusbarView())
-	for _, want := range []string{"✓ episode-01.mkv", "100%", "100 / 100 B"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("restored statusbar = %q, want %q", got, want)
-		}
+	if !strings.Contains(got, queuedGlyph+" episode-02.mkv") {
+		t.Fatalf("statusbar = %q, want the queue's next file", got)
+	}
+	if strings.Contains(got, "episode-01.mkv") {
+		t.Fatalf("statusbar = %q, want the finished file gone", got)
 	}
 }
 
-// A transfer that was interrupted comes back where the partial on disk says it
-// stopped, not where the last frame happened to be drawn.
-func TestStatusbarRestoresUnfinishedTransferFromPartial(t *testing.T) {
-	app, _, _ := barSessionApp(t, db.FilePending, 40)
-
-	app.restoreBar()
-
-	got := ansi.Strip(app.statusbarView())
-	for _, want := range []string{"episode-01.mkv", "40%", "40 / 100 B"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("restored statusbar = %q, want %q", got, want)
-		}
-	}
-}
-
-func TestStatusbarRestoreSkipsRemovedDownload(t *testing.T) {
-	app, database, file := barSessionApp(t, db.FileDone, 0)
-	if err := database.DeleteDownload(file.DownloadID); err != nil {
+// Nothing queued means nothing is going to be fetched, so the footer must not
+// keep showing a file — least of all one from a transfer that is over.
+func TestStatusbarEmptyWhenNothingIsQueued(t *testing.T) {
+	app, database, files := queueBarApp(t, 40)
+	if err := database.SetDownloadQueued(files[0].DownloadID, false); err != nil {
 		t.Fatal(err)
 	}
 	app.downloads.reload()
 
-	app.restoreBar()
-
-	if app.lastBar.CurrentFile != "" {
-		t.Fatalf("restored snapshot = %+v, want nothing to draw", app.lastBar)
-	}
 	if got := app.statusbarView(); got != "" {
-		t.Fatalf("statusbar = %q, want empty", got)
+		t.Fatalf("statusbar = %q, want empty with an empty queue", got)
+	}
+	if got, want := app.footerView(), app.helpLine(); got != want {
+		t.Fatalf("footer = %q, want just the help line %q", got, want)
 	}
 }
 
-// The strip is recorded as the engine reports files, so a session that is
-// killed still leaves the last transfer behind. The same file reported again
-// must not rewrite the row.
-func TestStatusbarRecordsFileAsItIsFetched(t *testing.T) {
-	app, database, file := barSessionApp(t, db.FilePending, 0)
-	if err := database.SetStatusbarFile(0); err != nil {
-		t.Fatal(err)
+// Every file on disk empties the queue too, whether or not the download's own
+// row ever recorded an outcome.
+func TestStatusbarEmptyOnceEveryFileHasLanded(t *testing.T) {
+	app, database, files := queueBarApp(t, 40)
+	for _, f := range files {
+		if err := database.SetFileStatusByHandle(f.DownloadID, f.NodeHandle, db.FileDone); err != nil {
+			t.Fatal(err)
+		}
 	}
+	app.downloads.reload()
 
-	snap := engine.Snapshot{
-		ActiveID:    file.DownloadID,
-		CurrentFile: "episode-01.mkv",
-		CurrentPath: file.LocalPath,
-		FileSize:    100,
-		FileDone:    10,
-	}
-	app.rememberBar(snap)
-
-	got, err := database.StatusbarFile()
-	if err != nil || got != file.ID {
-		t.Fatalf("recorded statusbar file = %d, %v, want %d", got, err, file.ID)
-	}
-
-	// a second event on the same file is not another write
-	if err := database.SetStatusbarFile(0); err != nil {
-		t.Fatal(err)
-	}
-	snap.FileDone = 20
-	app.rememberBar(snap)
-	if got, err := database.StatusbarFile(); err != nil || got != 0 {
-		t.Fatalf("recorded statusbar file = %d, %v, want the write skipped", got, err)
+	if got := app.statusbarView(); got != "" {
+		t.Fatalf("statusbar = %q, want empty once nothing is left to fetch", got)
 	}
 }
 

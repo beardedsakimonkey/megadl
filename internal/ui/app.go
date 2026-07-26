@@ -41,14 +41,6 @@ type App struct {
 	spinner  spinner.Model
 	spinning bool // spinner tick loop in flight
 
-	// lastBar is the transfer the statusbar drew most recently. It is kept
-	// after the engine goes idle so the strip holds its final frame instead
-	// of vanishing the moment a download stops or finishes.
-	lastBar engine.Snapshot
-	// savedBarFile is the file id last written to the database, so repeated
-	// progress events on the same file don't rewrite it.
-	savedBarFile int64
-
 	quota6h int64
 
 	fatal string
@@ -67,7 +59,6 @@ func NewApp(cfg *config.Config, database *db.DB, eng *engine.Engine, drv mega.Dr
 func (a *App) Init() tea.Cmd {
 	a.refreshQuota()
 	a.downloads.restore()
-	a.restoreBar()
 	return tea.Batch(a.waitEngine(), tickCmd(), a.spinCmd())
 }
 
@@ -135,7 +126,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case engineMsg:
 		a.refreshQuota()
 		a.downloads.reload()
-		a.rememberBar(a.eng.Snapshot())
 		return a, tea.Batch(a.waitEngine(), a.spinCmd())
 
 	case tickMsg:
@@ -265,98 +255,41 @@ func (a *App) footerView() string {
 	return line
 }
 
-// statusbarView draws the transfer strip and remembers what it drew. Once the
-// download stops or finishes, the same line stays put with the rate column
-// cleared and the spinner replaced by the download's status icon, so the last
-// transfer remains on screen instead of the footer collapsing under it.
+// statusbarView draws the strip for the head of the queue: the file being
+// fetched right now, or — while the queue is held, or between runs — the one it
+// will pick up next. The strip follows the queue rather than remembering
+// transfers, so it cannot describe work that is no longer waiting to happen: an
+// empty queue leaves an empty footer.
 func (a *App) statusbarView() string {
 	if a.eng == nil {
 		return ""
 	}
 	snap := a.eng.Snapshot()
 	if snap.ActiveID != 0 && snap.CurrentFile != "" {
-		a.lastBar = snap
 		return statusbarLine(snap, a.spinner.View(), a.width)
 	}
 
-	held := a.lastBar
-	if held.CurrentFile == "" {
-		return "" // nothing has been fetched yet this session
+	head := a.downloads.head
+	if head.file == nil {
+		return "" // nothing is queued, so there is nothing to draw
 	}
-	held.Rate = 0 // no bytes are moving, so the rate column stays blank
-	if snap.ActiveID == held.ActiveID {
-		// same download, merely between files: keep the spinner turning
-		return statusbarLine(held, a.spinner.View(), a.width)
-	}
-
-	row := a.downloadRow(held.ActiveID)
-	if row == nil {
-		// the download was removed from the list; let its strip go with it
-		a.lastBar = engine.Snapshot{}
-		return ""
-	}
-	if row.Status == db.StatusDone && held.FileSize > 0 {
-		// The last frame drawn is usually a progress event or two short of
-		// the end, since the download finishes between renders. The file did
-		// land in full, so the held strip says so rather than freezing at 99%.
-		held.FileDone = held.FileSize
-	}
-	// the row's own marker, so the strip and the list agree on how it went
-	marker := dlMarker(a.downloads.dlMarkerStateOf(row, snap), "")
-	return statusbarLine(held, marker, a.width)
-}
-
-// rememberBar records which file the strip is drawing, so the next session
-// starts with it rather than an empty footer. Only the file is remembered:
-// how far it got is read back off its row and its partial, so a restored strip
-// cannot describe a transfer that is no longer there. Writes that would change
-// nothing are skipped, so progress events don't hit the database.
-func (a *App) rememberBar(snap engine.Snapshot) {
-	if snap.ActiveID == 0 || snap.CurrentPath == "" {
-		return
-	}
-	f, err := a.db.FileByLocalPath(snap.ActiveID, snap.CurrentPath)
-	if err != nil || f == nil || f.ID == a.savedBarFile {
-		return
-	}
-	a.savedBarFile = f.ID
-	a.db.SetStatusbarFile(f.ID)
-}
-
-// restoreBar puts the last session's strip back, rebuilt from the file row and
-// what is on disk: a file that landed reads as complete, one that stopped
-// partway sits at its partial. A file the database no longer knows about — its
-// download removed since — simply leaves the footer as it was.
-func (a *App) restoreBar() {
-	id, err := a.db.StatusbarFile()
-	if err != nil || id == 0 {
-		return
-	}
-	f, err := a.db.File(id)
-	if err != nil || f == nil {
-		return
-	}
-	done := f.Size
-	if f.Status != db.FileDone && f.Status != db.FileSkipped {
-		done = partialSizes([]db.File{*f})[f.ID]
-	}
-	a.savedBarFile = f.ID
-	a.lastBar = engine.Snapshot{
-		ActiveID:    f.DownloadID,
+	f := head.file
+	// No bytes are moving, so the rate column stays blank and the partial on
+	// disk says how far the file has already got.
+	next := engine.Snapshot{
+		ActiveID:    head.dl.ID,
 		CurrentFile: filepath.Base(f.LocalPath),
 		CurrentPath: f.LocalPath,
 		FileSize:    f.Size,
-		FileDone:    done,
+		FileDone:    head.partial,
 	}
-}
-
-func (a *App) downloadRow(id int64) *db.Download {
-	for _, dl := range a.downloads.rows {
-		if dl.ID == id {
-			return dl
-		}
-	}
-	return nil
+	// the file's own marker, so the strip and its row in the file pane agree:
+	// spinning while its download runs between files, held while the queue is
+	// paused, waiting its turn otherwise
+	fetching := head.dl.ID == snap.ActiveID
+	frac := fileProgress(*f, snap, false, head.partial)
+	marker := fileMarker(fileMarkerStateOf(*f, fetching, snap.Paused, frac), a.spinFrame())
+	return statusbarLine(next, marker, a.width)
 }
 
 // statusbarLine renders the strip above the footer for a file transfer:

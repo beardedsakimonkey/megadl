@@ -49,6 +49,9 @@ type downloadsModel struct {
 	// head: the download being fetched, or the one a pause is holding at.
 	// Refreshed by reload.
 	queuePos map[int64]int
+	// head is the queue's next unit of work, which is what the status bar
+	// draws. Refreshed by reload.
+	head queueHead
 	// savedDownload is the row last written to the database, so repeated
 	// events on the same row don't rewrite it.
 	savedDownload int64
@@ -120,6 +123,7 @@ func (m *downloadsModel) reload() {
 		for i, id := range queue {
 			m.queuePos[id] = i
 		}
+		m.loadHead(queue)
 	}
 	if m.cursor >= len(m.rows) {
 		m.cursor = max(0, len(m.rows)-1)
@@ -130,6 +134,48 @@ func (m *downloadsModel) reload() {
 		m.quotaDismissed = false
 	}
 	m.loadFiles()
+}
+
+// queueHead is the queue's next unit of work: the download at the front and the
+// file inside it that the engine is fetching, or will pick up next. Its file is
+// nil when nothing is queued.
+type queueHead struct {
+	dl      *db.Download
+	file    *db.File
+	partial int64 // bytes of file already on disk
+}
+
+// loadHead works out what the front of the queue is going to fetch, given the
+// queue head first. The engine takes a download's files in listing order, so
+// that is its first queued file still waiting — the one being fetched now, or
+// the one a paused queue is holding at. The partial is stat'ed here so View
+// never touches the filesystem.
+func (m *downloadsModel) loadHead(queue []int64) {
+	m.head = queueHead{}
+	if len(queue) == 0 {
+		return
+	}
+	var dl *db.Download
+	for _, row := range m.rows {
+		if row.ID == queue[0] {
+			dl = row
+			break
+		}
+	}
+	if dl == nil {
+		return
+	}
+	files, err := m.app.db.Files(dl.ID)
+	if err != nil {
+		return
+	}
+	for _, f := range files {
+		if !f.Queued || f.Status != db.FilePending {
+			continue
+		}
+		m.head = queueHead{dl: dl, file: &f, partial: partialSizes([]db.File{f})[f.ID]}
+		return
+	}
 }
 
 // selectDownload focuses an existing library row after another flow reuses it.
@@ -982,27 +1028,14 @@ func isFetching(f db.File, dl *db.Download, snap engine.Snapshot) bool {
 }
 
 // pausedFile is the file a held queue is stopped at, or 0 when the queue is
-// running or holding somewhere else. The engine queues files rather than
-// pausing one, so the answer is put together here: the file the status bar was
-// last showing for this download, or else the first one the engine would pick
-// up. Only the head of the queue can be holding a file.
+// running or holding somewhere else. The engine queues files rather than pausing
+// one, so the answer comes from the queue: only its head can be holding a file,
+// and the file it holds is the one it would fetch next.
 func (m *downloadsModel) pausedFile(dl *db.Download, snap engine.Snapshot) int64 {
-	if !snap.Paused || !m.atHead(dl) {
+	if !snap.Paused || m.head.file == nil || m.head.dl.ID != dl.ID {
 		return 0
 	}
-	if m.app != nil && m.app.lastBar.ActiveID == dl.ID && m.app.lastBar.CurrentPath != "" {
-		for _, f := range m.files {
-			if f.LocalPath == m.app.lastBar.CurrentPath && f.Status == db.FilePending {
-				return f.ID
-			}
-		}
-	}
-	for _, f := range m.files {
-		if f.Queued && f.Status == db.FilePending {
-			return f.ID
-		}
-	}
-	return 0
+	return m.head.file.ID
 }
 
 func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Snapshot, pausedFile int64, selected bool, depth, width, sizeW int) string {

@@ -569,54 +569,6 @@ func TestSelectionPersistsAndClearsWithItsDownload(t *testing.T) {
 	}
 }
 
-func TestStatusbarFilePersistsAndClearsWithItsDownload(t *testing.T) {
-	d := openTest(t)
-
-	id, err := d.InsertDownload(&Download{
-		URL: "u", Handle: "h", LinkType: "folder", Name: "Show", DestPath: "/lib/Show",
-	}, []File{
-		{NodeHandle: "h1", RemotePath: "/Show/a.mkv", LocalPath: "/lib/Show/a.mkv", Size: 10, Queued: true},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if file, err := d.StatusbarFile(); err != nil || file != 0 {
-		t.Fatalf("statusbar file before any is recorded = %d, %v", file, err)
-	}
-
-	files, _ := d.Files(id)
-	// the strip's file is found by the path the engine reports
-	got, err := d.FileByLocalPath(id, "/lib/Show/a.mkv")
-	if err != nil || got == nil || got.ID != files[0].ID {
-		t.Fatalf("file by local path = %+v, %v, want %d", got, err, files[0].ID)
-	}
-	if missing, err := d.FileByLocalPath(id, "/lib/Show/gone.mkv"); err != nil || missing != nil {
-		t.Fatalf("file by unknown local path = %+v, %v, want nil", missing, err)
-	}
-
-	if err := d.SetSelectedDownload(id); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.SetStatusbarFile(files[0].ID); err != nil {
-		t.Fatal(err)
-	}
-	if file, err := d.StatusbarFile(); err != nil || file != files[0].ID {
-		t.Fatalf("statusbar file = %d, %v, want %d", file, err, files[0].ID)
-	}
-	// the two pieces of view state share a row and must not overwrite each other
-	if sel, err := d.SelectedDownload(); err != nil || sel != id {
-		t.Fatalf("selected download = %d, %v, want %d", sel, err, id)
-	}
-
-	if err := d.DeleteDownload(id); err != nil {
-		t.Fatal(err)
-	}
-	if file, err := d.StatusbarFile(); err != nil || file != 0 {
-		t.Fatalf("statusbar file after delete = %d, %v, want cleared", file, err)
-	}
-}
-
 func TestMigrationAddsSelectedFileColumn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	raw, err := sql.Open("sqlite", path)
@@ -662,9 +614,10 @@ func TestMigrationAddsSelectedFileColumn(t *testing.T) {
 	}
 }
 
-// A database whose ui_state predates the statusbar column has to gain it on
-// open, keeping whatever selection it already held.
-func TestMigrationAddsStatusbarFileColumn(t *testing.T) {
+// The statusbar follows the queue now, so opening a database from a version
+// that remembered its last file drops that obsolete state without disturbing
+// the selected download stored beside it.
+func TestMigrationDropsStatusbarFileColumn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	raw, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -672,8 +625,10 @@ func TestMigrationAddsStatusbarFileColumn(t *testing.T) {
 	}
 	if _, err := raw.Exec(`CREATE TABLE ui_state (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
-		selected_download_id INTEGER);
-		INSERT INTO ui_state (id, selected_download_id) VALUES (1, 7)`); err != nil {
+		selected_download_id INTEGER REFERENCES downloads(id) ON DELETE SET NULL,
+		statusbar_file_id INTEGER REFERENCES download_files(id) ON DELETE SET NULL);
+		INSERT INTO ui_state (id, selected_download_id, statusbar_file_id)
+		VALUES (1, 7, 42)`); err != nil {
 		t.Fatal(err)
 	}
 	raw.Close()
@@ -684,30 +639,10 @@ func TestMigrationAddsStatusbarFileColumn(t *testing.T) {
 	}
 	defer d.Close()
 
-	if file, err := d.StatusbarFile(); err != nil || file != 0 {
-		t.Fatalf("statusbar file in migrated database = %d, %v", file, err)
-	}
 	if sel, err := d.SelectedDownload(); err != nil || sel != 7 {
 		t.Fatalf("selection in migrated database = %d, %v, want 7", sel, err)
 	}
-
-	id, err := d.InsertDownload(&Download{
-		URL: "u", Handle: "h", LinkType: "folder", Name: "Show", DestPath: "/lib/Show",
-	}, []File{{NodeHandle: "h1", RemotePath: "/Show/a.mkv", LocalPath: "/lib/Show/a.mkv", Queued: true}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	files, _ := d.Files(id)
-	if err := d.SetStatusbarFile(files[0].ID); err != nil {
-		t.Fatal(err)
-	}
-	if file, err := d.StatusbarFile(); err != nil || file != files[0].ID {
-		t.Fatalf("statusbar file = %d, %v, want %d", file, err, files[0].ID)
-	}
-	if err := d.DeleteDownload(id); err != nil {
-		t.Fatal(err)
-	}
-	if file, err := d.StatusbarFile(); err != nil || file != 0 {
-		t.Fatalf("statusbar file after delete = %d, %v, want cleared", file, err)
+	if err := d.sql.QueryRow(`SELECT statusbar_file_id FROM ui_state`).Scan(new(int64)); err == nil {
+		t.Fatal("obsolete statusbar_file_id column still exists after migration")
 	}
 }
