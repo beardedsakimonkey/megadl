@@ -262,6 +262,21 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
+
+	// Clipboard reads (ctrl+v) and cursor blinks come back as messages
+	// bubbles keeps to itself, so hand anything left over to the focused
+	// prompt rather than dropping it.
+	switch m.state {
+	case stateURL:
+		var cmd tea.Cmd
+		m.urlInput, cmd = m.urlInput.Update(msg)
+		m.refreshLinkHint()
+		return m, cmd
+	case stateName:
+		var cmd tea.Cmd
+		m.nameInput, cmd = m.nameInput.Update(msg)
+		return m, cmd
+	}
 	return m, nil
 }
 

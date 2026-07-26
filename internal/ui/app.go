@@ -94,6 +94,14 @@ func (a *App) spinCmd() tea.Cmd {
 	return a.spinner.Tick
 }
 
+// isPaste reports whether a key event carries clipboard text: a bracketed
+// paste from the terminal, or ctrl+v, which bubbles' text inputs answer with
+// a clipboard read. Bracketed pastes stringify as "[text]", so they never
+// collide with the single-key shortcuts.
+func isPaste(key tea.KeyMsg) bool {
+	return key.Paste || key.Type == tea.KeyCtrlV
+}
+
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -141,6 +149,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if key, ok := msg.(tea.KeyMsg); ok {
+		// pasting anywhere means "add this link": open the dialog and let
+		// the paste land in its URL prompt
+		if isPaste(key) {
+			a.addlink = newAddlinkModel(a)
+			initCmd := a.addlink.init()
+			model, cmd := a.addlink.update(key)
+			a.addlink = model
+			return a, tea.Batch(initCmd, cmd)
+		}
 		switch key.String() {
 		case "q", "ctrl+c":
 			return a, tea.Quit

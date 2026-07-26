@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
@@ -119,6 +120,50 @@ func TestStatusbarNarrowDropsByteCounts(t *testing.T) {
 	}
 	if w := lipgloss.Width(got); w > 48 {
 		t.Fatalf("statusbar width = %d, want <= 48", w)
+	}
+}
+
+func TestPasteOpensAddlinkDialogPrefilled(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	link := "https://mega.nz/folder/AAAAAAAA#0123456789abcdefghijkl"
+
+	model, _ := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(link),
+		Paste: true,
+	})
+	app = model.(*App)
+	if app.addlink == nil {
+		t.Fatal("paste should open the add-link dialog")
+	}
+	if got := app.addlink.urlInput.Value(); got != link {
+		t.Fatalf("url input = %q, want %q", got, link)
+	}
+	if got := app.addlink.urlInput.TextStyle.GetForeground(); got != colorOrange {
+		t.Fatalf("link hint = %v, want %v", got, colorOrange)
+	}
+
+	// a paste is never a shortcut, even when it is a single "q"
+	app, _ = openAddlinkTestApp(t)
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q"), Paste: true})
+	app = model.(*App)
+	if app.addlink == nil || app.addlink.urlInput.Value() != "q" {
+		t.Fatalf("pasted %q should open the dialog, got %+v", "q", app.addlink)
+	}
+}
+
+func TestCtrlVOpensAddlinkDialogAndReadsClipboard(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	app = model.(*App)
+	if app.addlink == nil || app.addlink.state != stateURL {
+		t.Fatalf("ctrl+v should open the add-link dialog, got %+v", app.addlink)
+	}
+	// the clipboard read itself is a bubbles command; running it here would
+	// touch the real clipboard, so only its presence is checked
+	if cmd == nil {
+		t.Fatal("ctrl+v should schedule a clipboard read")
 	}
 }
 
