@@ -798,21 +798,21 @@ func TestQueueingWhilePausedExplainsItself(t *testing.T) {
 	}
 }
 
-// p holds and releases the queue wherever the cursor happens to be.
-func TestPKeyTogglesPause(t *testing.T) {
+// space holds and releases the queue wherever the cursor happens to be.
+func TestSpaceKeyTogglesPause(t *testing.T) {
 	app, database, _ := toggleTestApp(t)
 
-	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	app.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
 	if !app.eng.Paused() {
-		t.Fatal("p did not pause the queue")
+		t.Fatal("space did not pause the queue")
 	}
 	if paused, _, _ := database.Paused(); !paused {
 		t.Fatal("pause was not persisted")
 	}
 
-	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	app.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
 	if app.eng.Paused() {
-		t.Fatal("p did not resume the queue")
+		t.Fatal("space did not resume the queue")
 	}
 	if paused, _, _ := database.Paused(); paused {
 		t.Fatal("resume was not persisted")
