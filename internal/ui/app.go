@@ -57,7 +57,7 @@ func NewApp(cfg *config.Config, database *db.DB, eng *engine.Engine, drv mega.Dr
 
 func (a *App) Init() tea.Cmd {
 	a.refreshQuota()
-	a.downloads.reload()
+	a.downloads.restore()
 	return tea.Batch(a.waitEngine(), tickCmd(), a.spinCmd())
 }
 

@@ -42,9 +42,9 @@ type downloadsModel struct {
 	// by file ID) so stopped files keep their progress bar. loadFiles
 	// refreshes it so View never touches the filesystem.
 	partials map[int64]int64
-	// selectedFile remembers the last highlighted file for each download.
-	// It is intentionally UI-only state and is not persisted.
-	selectedFile map[int64]int64 // download ID -> file ID
+	// savedDownload is the row last written to the database, so repeated
+	// events on the same row don't rewrite it.
+	savedDownload int64
 
 	confirmRemove bool // pending x confirmation for rows[cursor]
 	refreshing    bool // remote listing fetch in flight
@@ -74,9 +74,24 @@ type fileOpenedMsg struct {
 }
 
 func newDownloadsModel(app *App) downloadsModel {
-	return downloadsModel{
-		app:          app,
-		selectedFile: make(map[int64]int64),
+	return downloadsModel{app: app}
+}
+
+// restore opens the view on the download the last session left selected; its
+// file cursor follows from the download's own recorded selection. An unknown
+// or removed download falls back to the top of the list.
+func (m *downloadsModel) restore() {
+	m.reload()
+	id, err := m.app.db.SelectedDownload()
+	if err != nil || id == 0 {
+		return
+	}
+	for i, dl := range m.rows {
+		if dl.ID == id {
+			m.cursor, m.savedDownload = i, id
+			m.loadFiles()
+			return
+		}
 	}
 }
 
@@ -101,6 +116,7 @@ func (m *downloadsModel) selectDownload(id int64) {
 		m.cursor = i
 		m.pane = paneList
 		m.loadFiles()
+		m.rememberSelection()
 		return
 	}
 }
@@ -114,7 +130,7 @@ func (m *downloadsModel) loadFiles() {
 	}
 	dl := m.rows[m.cursor]
 	changedDownload := dl.ID != m.filesFor
-	m.rememberSelectedFile()
+	m.rememberFileCursor()
 	files, err := m.app.db.Files(dl.ID)
 	if err != nil {
 		return
@@ -122,12 +138,10 @@ func (m *downloadsModel) loadFiles() {
 	if changedDownload {
 		m.fileCursor, m.fileScroll = 0, 0
 	}
-	if fileID, ok := m.selectedFile[dl.ID]; ok {
-		for i := range files {
-			if files[i].ID == fileID {
-				m.fileCursor = i
-				break
-			}
+	for i := range files {
+		if files[i].ID == dl.SelectedFileID {
+			m.fileCursor = i
+			break
 		}
 	}
 	m.filesFor = dl.ID
@@ -157,17 +171,49 @@ func partialSizes(files []db.File) map[int64]int64 {
 	return sizes
 }
 
-func (m *downloadsModel) rememberSelectedFile() {
+// rememberSelection persists the cursor — the highlighted download, and the
+// file highlighted inside it — so the next session reopens where this one left
+// off. It runs after every event; writes that would change nothing are
+// skipped, so cursor keys don't hit the database on every press.
+func (m *downloadsModel) rememberSelection() {
+	m.rememberFileCursor()
+	if m.cursor >= len(m.rows) {
+		return
+	}
+	if id := m.rows[m.cursor].ID; id != m.savedDownload {
+		m.savedDownload = id
+		m.app.db.SetSelectedDownload(id)
+	}
+}
+
+// rememberFileCursor records the file pane's cursor against the download the
+// pane is showing, which is not always the one under the list cursor: loadFiles
+// calls this to capture the outgoing selection as the panes switch downloads.
+func (m *downloadsModel) rememberFileCursor() {
 	if m.filesFor == 0 || m.fileCursor < 0 || m.fileCursor >= len(m.files) {
 		return
 	}
-	if m.selectedFile == nil {
-		m.selectedFile = make(map[int64]int64)
+	fileID := m.files[m.fileCursor].ID
+	for _, dl := range m.rows {
+		if dl.ID != m.filesFor {
+			continue
+		}
+		if dl.SelectedFileID == fileID {
+			return // already recorded
+		}
+		dl.SelectedFileID = fileID
+		break
 	}
-	m.selectedFile[m.filesFor] = m.files[m.fileCursor].ID
+	m.app.db.SetSelectedFile(m.filesFor, fileID)
 }
 
 func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
+	cmd := m.handle(msg)
+	m.rememberSelection()
+	return cmd
+}
+
+func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 	if res, ok := msg.(listingMergedMsg); ok {
 		m.refreshing = false
 		if res.err != nil {

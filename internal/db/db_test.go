@@ -303,3 +303,93 @@ func TestFindByResource(t *testing.T) {
 		t.Fatalf("file resource = %+v, %v", dl, err)
 	}
 }
+
+func TestSelectionPersistsAndClearsWithItsDownload(t *testing.T) {
+	d := openTest(t)
+
+	id, err := d.InsertDownload(&Download{
+		URL: "u", Handle: "h", LinkType: "folder", Name: "Show", DestPath: "/lib/Show",
+	}, []File{
+		{NodeHandle: "h1", RemotePath: "/Show/a.mkv", LocalPath: "/lib/Show/a.mkv", Wanted: true},
+		{NodeHandle: "h2", RemotePath: "/Show/b.mkv", LocalPath: "/lib/Show/b.mkv", Wanted: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sel, err := d.SelectedDownload(); err != nil || sel != 0 {
+		t.Fatalf("selection before any is recorded = %d, %v", sel, err)
+	}
+
+	files, _ := d.Files(id)
+	if err := d.SetSelectedDownload(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetSelectedFile(id, files[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	// the second write must update the single row, not add another
+	if err := d.SetSelectedDownload(id); err != nil {
+		t.Fatal(err)
+	}
+
+	if sel, err := d.SelectedDownload(); err != nil || sel != id {
+		t.Fatalf("selected download = %d, %v, want %d", sel, err, id)
+	}
+	dl, err := d.Download(id)
+	if err != nil || dl.SelectedFileID != files[1].ID {
+		t.Fatalf("selected file = %+v, %v, want %d", dl, err, files[1].ID)
+	}
+
+	if err := d.DeleteDownload(id); err != nil {
+		t.Fatal(err)
+	}
+	if sel, err := d.SelectedDownload(); err != nil || sel != 0 {
+		t.Fatalf("selection after delete = %d, %v, want cleared", sel, err)
+	}
+}
+
+func TestMigrationAddsSelectedFileColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE downloads (
+		id INTEGER PRIMARY KEY,
+		url TEXT NOT NULL,
+		handle TEXT NOT NULL,
+		link_type TEXT NOT NULL,
+		name TEXT NOT NULL,
+		dest_path TEXT NOT NULL,
+		selection TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'queued',
+		error TEXT NOT NULL DEFAULT '',
+		total_bytes INTEGER NOT NULL DEFAULT 0,
+		done_bytes INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		started_at INTEGER,
+		completed_at INTEGER);
+		INSERT INTO downloads (url, handle, link_type, name, dest_path, created_at)
+		VALUES ('u', 'h', 'folder', 'Show', '/l/Show', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	dl, err := d.Download(1)
+	if err != nil || dl.SelectedFileID != 0 {
+		t.Fatalf("migrated download = %+v, %v", dl, err)
+	}
+	if err := d.SetSelectedDownload(1); err != nil {
+		t.Fatal(err)
+	}
+	if sel, err := d.SelectedDownload(); err != nil || sel != 1 {
+		t.Fatalf("selection in migrated database = %d, %v", sel, err)
+	}
+}

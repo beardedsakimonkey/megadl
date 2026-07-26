@@ -190,8 +190,10 @@ func TestWheelMovesTheCursorOfThePaneUnderThePointer(t *testing.T) {
 func filePaneModel(t *testing.T, dir string) (*downloadsModel, *[]string) {
 	t.Helper()
 	opened := &[]string{}
+	app, _ := openAddlinkTestApp(t)
+	app.eng = engine.New(nil, nil)
 	m := &downloadsModel{
-		app:  &App{eng: engine.New(nil, nil)},
+		app:  app,
 		rows: []*db.Download{{ID: 7, Name: "Show", DestPath: dir}},
 		files: []db.File{
 			{ID: 1, LocalPath: filepath.Join(dir, "Season 01", "e1.mkv"),

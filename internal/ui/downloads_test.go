@@ -777,3 +777,37 @@ func TestDownloadsRememberLastSelectedFilePerFolder(t *testing.T) {
 		t.Fatalf("restored file for second folder = %d, want %d", got, secondFileID)
 	}
 }
+
+func TestSelectionIsRestoredInANewSession(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+	for _, name := range []string{"First", "Second"} {
+		if _, err := database.InsertDownload(&db.Download{
+			URL: name, Handle: name, LinkType: "folder", Name: name,
+			DestPath: "/dl/" + name,
+		}, []db.File{
+			{NodeHandle: name + "a", RemotePath: "/" + name + "/a", LocalPath: "/dl/" + name + "/a", Wanted: true},
+			{NodeHandle: name + "b", RemotePath: "/" + name + "/b", LocalPath: "/dl/" + name + "/b", Wanted: true},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m := &app.downloads
+	m.reload()
+	pressKey(m, "j") // second row
+	pressKey(m, "l") // into its files
+	pressKey(m, "j") // second file
+	wantDownload, wantFile := m.rows[m.cursor].ID, m.files[m.fileCursor].ID
+
+	// a fresh app over the same database, as after a restart
+	next := &App{cfg: app.cfg, db: database}
+	next.downloads = newDownloadsModel(next)
+	next.downloads.restore()
+
+	if got := next.downloads.rows[next.downloads.cursor].ID; got != wantDownload {
+		t.Fatalf("restored download = %d, want %d", got, wantDownload)
+	}
+	if got := next.downloads.files[next.downloads.fileCursor].ID; got != wantFile {
+		t.Fatalf("restored file = %d, want %d", got, wantFile)
+	}
+}

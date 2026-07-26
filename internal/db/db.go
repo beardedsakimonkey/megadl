@@ -14,21 +14,22 @@ import (
 
 const schema = `
 CREATE TABLE IF NOT EXISTS downloads (
-  id           INTEGER PRIMARY KEY,
-  url          TEXT NOT NULL,
-  handle       TEXT NOT NULL,
-  link_type    TEXT NOT NULL CHECK (link_type IN ('file','folder')),
-  name         TEXT NOT NULL,
-  dest_path    TEXT NOT NULL,
-  selection    TEXT NOT NULL DEFAULT '',
-  status       TEXT NOT NULL DEFAULT 'queued'
-               CHECK (status IN ('queued','running','stopped','done','error','quota')),
-  error        TEXT NOT NULL DEFAULT '',
-  total_bytes  INTEGER NOT NULL DEFAULT 0,
-  done_bytes   INTEGER NOT NULL DEFAULT 0,
-  created_at   INTEGER NOT NULL,
-  started_at   INTEGER,
-  completed_at INTEGER
+  id               INTEGER PRIMARY KEY,
+  url              TEXT NOT NULL,
+  handle           TEXT NOT NULL,
+  link_type        TEXT NOT NULL CHECK (link_type IN ('file','folder')),
+  name             TEXT NOT NULL,
+  dest_path        TEXT NOT NULL,
+  selection        TEXT NOT NULL DEFAULT '',
+  selected_file_id INTEGER NOT NULL DEFAULT 0,
+  status           TEXT NOT NULL DEFAULT 'queued'
+                   CHECK (status IN ('queued','running','stopped','done','error','quota')),
+  error            TEXT NOT NULL DEFAULT '',
+  total_bytes      INTEGER NOT NULL DEFAULT 0,
+  done_bytes       INTEGER NOT NULL DEFAULT 0,
+  created_at       INTEGER NOT NULL,
+  started_at       INTEGER,
+  completed_at     INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS download_files (
@@ -50,6 +51,13 @@ CREATE TABLE IF NOT EXISTS transfer_log (
   bytes INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_transfer_ts ON transfer_log(ts);
+
+-- Single row (id = 1) holding view state that outlives the process. The
+-- foreign key clears the selection when the download it points at is removed.
+CREATE TABLE IF NOT EXISTS ui_state (
+  id                   INTEGER PRIMARY KEY CHECK (id = 1),
+  selected_download_id INTEGER REFERENCES downloads(id) ON DELETE SET NULL
+);
 `
 
 // Download statuses.
@@ -71,13 +79,15 @@ const (
 )
 
 type Download struct {
-	ID          int64
-	URL         string
-	Handle      string
-	LinkType    string // "file" | "folder"
-	Name        string
-	DestPath    string
-	Selection   string // comma-joined selected node handles
+	ID             int64
+	URL            string
+	Handle         string
+	LinkType       string // "file" | "folder"
+	Name           string
+	DestPath       string
+	Selection      string // comma-joined selected node handles
+	SelectedFileID int64  // file the TUI last highlighted here; 0 if none
+
 	Status      string
 	Error       string
 	TotalBytes  int64
@@ -113,11 +123,16 @@ func Open(path string) (*DB, error) {
 		h.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	// pre-`wanted` databases; fresh ones already have the column
-	if _, err := h.Exec(`ALTER TABLE download_files ADD COLUMN wanted INTEGER NOT NULL DEFAULT 1`); err != nil &&
-		!strings.Contains(err.Error(), "duplicate column") {
-		h.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
+	// Columns added after the fact; fresh databases already have them from
+	// the schema above, so a duplicate-column error means "already migrated".
+	for _, stmt := range []string{
+		`ALTER TABLE download_files ADD COLUMN wanted INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE downloads ADD COLUMN selected_file_id INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := h.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			h.Close()
+			return nil, fmt.Errorf("migrate: %w", err)
+		}
 	}
 	return &DB{sql: h}, nil
 }
@@ -189,7 +204,7 @@ func scanDownload(row interface{ Scan(...any) error }) (*Download, error) {
 	var created int64
 	var started, completed sql.NullInt64
 	err := row.Scan(&dl.ID, &dl.URL, &dl.Handle, &dl.LinkType, &dl.Name, &dl.DestPath,
-		&dl.Selection, &dl.Status, &dl.Error, &dl.TotalBytes, &dl.DoneBytes,
+		&dl.Selection, &dl.SelectedFileID, &dl.Status, &dl.Error, &dl.TotalBytes, &dl.DoneBytes,
 		&created, &started, &completed)
 	if err != nil {
 		return nil, err
@@ -204,8 +219,9 @@ func scanDownload(row interface{ Scan(...any) error }) (*Download, error) {
 	return &dl, nil
 }
 
-const downloadCols = `id, url, handle, link_type, name, dest_path, selection, status,
-	error, total_bytes, done_bytes, created_at, started_at, completed_at`
+const downloadCols = `id, url, handle, link_type, name, dest_path, selection,
+	selected_file_id, status, error, total_bytes, done_bytes, created_at,
+	started_at, completed_at`
 
 func (d *DB) collectDownloads(query string, args ...any) ([]*Download, error) {
 	rows, err := d.sql.Query(query, args...)
@@ -354,6 +370,32 @@ func (d *DB) FindByDestPath(destPath string) (*Download, error) {
 		return nil, err
 	}
 	return dls[0], nil
+}
+
+// SetSelectedDownload records the download the TUI cursor is on, so the next
+// session opens on the same row.
+func (d *DB) SetSelectedDownload(id int64) error {
+	_, err := d.sql.Exec(`INSERT INTO ui_state (id, selected_download_id) VALUES (1, ?)
+		ON CONFLICT(id) DO UPDATE SET selected_download_id = excluded.selected_download_id`, id)
+	return err
+}
+
+// SelectedDownload returns the download recorded by SetSelectedDownload, or 0
+// when there is none — including when that download has since been removed.
+func (d *DB) SelectedDownload() (int64, error) {
+	var id sql.NullInt64
+	err := d.sql.QueryRow(`SELECT selected_download_id FROM ui_state WHERE id = 1`).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return id.Int64, err
+}
+
+// SetSelectedFile records the file the TUI file pane is highlighting inside a
+// download; 0 clears it.
+func (d *DB) SetSelectedFile(downloadID, fileID int64) error {
+	_, err := d.sql.Exec(`UPDATE downloads SET selected_file_id = ? WHERE id = ?`, fileID, downloadID)
+	return err
 }
 
 // ResetRunning is boot recovery: anything left 'running' by a previous
