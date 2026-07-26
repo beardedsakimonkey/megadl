@@ -244,27 +244,20 @@ func (a *App) headerView() string {
 	title := styleLogo.Render(" 󰇚 ") +
 		styleLogoBold.Render("MEGA") +
 		styleLogo.Render(" DL")
-	count := styleDim.Render(fmt.Sprintf("%d downloads", len(a.downloads.rows)))
-	gap := a.width - lipgloss.Width(title) - lipgloss.Width(count) - 1
+	quota := styleDim.Render("↓ ") +
+		quotaStyle(a.quota6h).Bold(true).Render(fmt.Sprintf("%.1f", float64(a.quota6h)/(1<<30))) +
+		styleDim.Render(" GiB in last 6h")
+	gap := a.width - lipgloss.Width(title) - lipgloss.Width(quota) - 1
 	if gap < 1 {
 		gap = 1
 	}
-	line := title + strings.Repeat(" ", gap) + count
+	line := title + strings.Repeat(" ", gap) + quota
 	rule := styleDim.Render(strings.Repeat("─", max(1, a.width)))
 	return line + "\n" + rule
 }
 
 func (a *App) footerView() string {
-	quota := styleDim.Render("↓ ") +
-		stylePrimaryText.Bold(true).Render(fmt.Sprintf("%.1f", float64(a.quota6h)/(1<<30))) +
-		styleDim.Render(" GiB in last 6h")
-
-	help := a.helpLine()
-	gap := a.width - lipgloss.Width(quota) - lipgloss.Width(help)
-	if gap < 1 {
-		gap = 1
-	}
-	line := help + strings.Repeat(" ", gap) + quota
+	line := a.helpLine()
 
 	if bar := a.statusbarView(); bar != "" {
 		return bar + "\n" + line

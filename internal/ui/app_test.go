@@ -414,20 +414,20 @@ func TestCtrlVOpensAddlinkDialogAndReadsClipboard(t *testing.T) {
 	}
 }
 
-func TestFooterShowsAmountInLastSixHours(t *testing.T) {
+func TestHeaderShowsAmountInLastSixHours(t *testing.T) {
 	app := &App{
 		width:   100,
 		quota6h: 1536 << 20,
 	}
 
-	footer := app.footerView()
+	header := app.headerView()
 	for _, wanted := range []string{
 		styleDim.Render("↓ "),
-		stylePrimaryText.Bold(true).Render("1.5"),
+		quotaStyle(1536 << 20).Bold(true).Render("1.5"),
 		styleDim.Render(" GiB in last 6h"),
 	} {
-		if !strings.Contains(footer, wanted) {
-			t.Fatalf("footer = %q, want %q", footer, wanted)
+		if !strings.Contains(header, wanted) {
+			t.Fatalf("header = %q, want %q", header, wanted)
 		}
 	}
 }

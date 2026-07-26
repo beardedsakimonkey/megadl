@@ -42,6 +42,23 @@ var (
 			BorderForeground(colorPrimary).Padding(1, 2)
 )
 
+// quotaStyle grades the 6h transfer total from green to red in four steps.
+// MEGA's free-tier ceiling sits around 5 GiB, so the bands are quarters of
+// that and everything at or past it renders in the same red as an error.
+func quotaStyle(bytes int64) lipgloss.Style {
+	const limit = 5 << 30
+	switch {
+	case bytes < limit/4:
+		return styleOK
+	case bytes < limit/2:
+		return stylePartial
+	case bytes < limit*3/4:
+		return styleWarn
+	default:
+		return styleError
+	}
+}
+
 // cursorBar is the two-cell left gutter that marks the cursor row: an accent
 // bar in the focused pane, dim for the remembered row of an unfocused one,
 // blank elsewhere. Its width is constant so rows never shift.
