@@ -11,6 +11,7 @@ import (
 
 	"megadl/internal/config"
 	"megadl/internal/db"
+	"megadl/internal/engine"
 	"megadl/internal/mega"
 )
 
@@ -26,6 +27,7 @@ func openAddlinkTestApp(t *testing.T) (*App, *db.DB) {
 	app := &App{
 		cfg: &config.Config{DownloadDir: dir},
 		db:  database,
+		eng: engine.New(nil, database),
 	}
 	app.downloads = newDownloadsModel(app)
 	return app, database
@@ -72,6 +74,63 @@ func TestAddlinkSuggestsExistingResourceInsteadOfDuplicate(t *testing.T) {
 	if app.downloads.rows[app.downloads.cursor].ID != id {
 		t.Fatalf("selected download = %d, want %d",
 			app.downloads.rows[app.downloads.cursor].ID, id)
+	}
+}
+
+func TestAddlinkEnqueuesWithoutNamePromptWhenNameIsFree(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+
+	url := "https://mega.nz/file/AAAAAAAA#key"
+	m := newAddlinkModel(app)
+	m.url, m.linkType, m.state = url, "file", stateListing
+	model, cmd := m.update(listResultMsg{
+		url: url,
+		nodes: []mega.Node{{
+			Path: "/skins.zip", Name: "skins.zip", Type: "file",
+			Handle: "root", Size: 10,
+		}},
+	})
+	if model != nil || cmd != nil {
+		t.Fatalf("free name should close modal: model=%+v, cmd=%v", model, cmd)
+	}
+
+	rows, err := database.Downloads()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("downloads = %+v, %v", rows, err)
+	}
+	if rows[0].Name != "skins.zip" {
+		t.Fatalf("name = %q, want %q", rows[0].Name, "skins.zip")
+	}
+	if want := filepath.Join(app.cfg.DownloadDir, "skins.zip"); rows[0].DestPath != want {
+		t.Fatalf("dest = %q, want %q", rows[0].DestPath, want)
+	}
+}
+
+// A folder link keeps the picker; only the name prompt behind it is skipped.
+func TestAddlinkEnqueuesFromPickerWithoutNamePrompt(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+
+	url := "https://mega.nz/folder/AAAAAAAA#key"
+	m := newAddlinkModel(app)
+	m.url, m.linkType, m.state = url, "folder", stateListing
+	model, _ := m.update(listResultMsg{
+		url: url,
+		nodes: []mega.Node{
+			{Path: "/Skins", Name: "Skins", Type: "folder", Handle: "root"},
+			{Path: "/Skins/a.zip", Name: "a.zip", Type: "file", Handle: "a", Size: 10},
+		},
+	})
+	if model == nil || model.state != statePicker {
+		t.Fatalf("state = %+v, want picker", model)
+	}
+
+	model, cmd := model.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if model != nil || cmd != nil {
+		t.Fatalf("free name should close modal: model=%+v, cmd=%v", model, cmd)
+	}
+	rows, err := database.Downloads()
+	if err != nil || len(rows) != 1 || rows[0].Name != "Skins" {
+		t.Fatalf("downloads = %+v, %v", rows, err)
 	}
 }
 
@@ -123,9 +182,8 @@ func TestEnqueueRejectsResourceAddedAfterListing(t *testing.T) {
 		Path: "/skins.zip", Name: "skins.zip", Type: "file",
 		Handle: "root", Size: 10,
 	}}
-	m.nameInput.SetValue("skins (2).zip")
 
-	err := m.enqueue()
+	err := m.enqueue("skins (2).zip")
 	if err == nil || !strings.Contains(err.Error(), "reuse the existing download") {
 		t.Fatalf("enqueue error = %v", err)
 	}

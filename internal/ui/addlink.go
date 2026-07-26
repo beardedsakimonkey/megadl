@@ -239,7 +239,7 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 			m.state = statePicker
 			return m, nil
 		}
-		return m, m.enterNameState()
+		return m.submit()
 
 	case decodeFrameMsg:
 		if m.state != stateDecoding || msg.seq != m.decodeSeq {
@@ -415,7 +415,7 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 				return m, nil
 			}
 			m.errMsg = ""
-			return m, m.enterNameState()
+			return m.submit()
 		}
 		return m, nil
 
@@ -428,7 +428,7 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 			}
 			return nil, nil
 		case "enter":
-			if err := m.enqueue(); err != nil {
+			if err := m.enqueue(m.nameInput.Value()); err != nil {
 				m.errMsg = err.Error()
 				return m, nil
 			}
@@ -465,10 +465,27 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 	return m, nil
 }
 
-func (m *addlinkModel) enterNameState() tea.Cmd {
+// submit enqueues the download under the name derived from the link, which
+// needs no confirmation when nothing else claims it. A collision (or an
+// enqueue that fails outright) falls back to the name prompt so the user can
+// settle it. A nil model closes the modal, as everywhere else in update.
+func (m *addlinkModel) submit() (*addlinkModel, tea.Cmd) {
 	root := m.nodes[0]
 	name := naming.ForNode(root.Name, root.Handle)
-	name = naming.EnsureUnique(m.app.cfg.DownloadDir, name, m.pendingNames())
+	unique := naming.EnsureUnique(m.app.cfg.DownloadDir, name, m.pendingNames())
+	if unique == name {
+		err := m.enqueue(name)
+		if err == nil {
+			return nil, nil
+		}
+		m.errMsg = err.Error()
+	}
+	return m, m.promptName(unique)
+}
+
+// promptName asks the user to confirm a name that couldn't be used as-is; the
+// prompt starts on the deduplicated suggestion.
+func (m *addlinkModel) promptName(name string) tea.Cmd {
 	m.nameInput.SetValue(name)
 	m.nameInput.CursorEnd()
 	m.state = stateName
@@ -487,7 +504,7 @@ func (m *addlinkModel) pendingNames() map[string]bool {
 	return taken
 }
 
-func (m *addlinkModel) enqueue() error {
+func (m *addlinkModel) enqueue(rawName string) error {
 	root := m.nodes[0]
 	existing, err := m.app.db.FindByResource(m.linkType, root.Handle)
 	if err != nil {
@@ -497,7 +514,7 @@ func (m *addlinkModel) enqueue() error {
 		return fmt.Errorf("%q is already in the library; reuse the existing download", existing.Name)
 	}
 
-	name := naming.Sanitize(m.nameInput.Value())
+	name := naming.Sanitize(rawName)
 	if name == "" {
 		return fmt.Errorf("name can't be empty")
 	}
@@ -654,7 +671,7 @@ func (m *addlinkModel) view() string {
 		if len(m.picker.rows) > 0 {
 			count, bytes = m.picker.totals()
 		}
-		body = styleTitle.Render("Name this download") + "\n\n" +
+		body = styleTitle.Render("Name already taken") + "\n\n" +
 			m.nameInput.View() + "\n\n" +
 			styleDim.Render(fmt.Sprintf("%d file(s), %s → %s/", count, humanBytes(bytes),
 				truncateMiddle(m.app.cfg.DownloadDir, 50)))
