@@ -1056,7 +1056,7 @@ func (m *downloadsModel) detailView(width int) string {
 			"remove %q from the list? files on disk are kept (y/n)", m.rows[m.cursor].Name)))
 	}
 	if m.notice != "" {
-		lines = append(lines, " "+styleAccent.Render(m.notice))
+		lines = append(lines, " "+styleNotice.Render(m.notice))
 	}
 	return strings.Join(lines, "\n")
 }

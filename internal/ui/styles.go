@@ -28,6 +28,7 @@ var (
 	styleWarn        = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	stylePartial     = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	styleAccent      = lipgloss.NewStyle().Foreground(colorPrimary)
+	styleNotice      = lipgloss.NewStyle().Foreground(colorOrange)
 	stylePrimaryText = lipgloss.NewStyle().Foreground(colorPrimaryText)
 	styleProgress    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleDecode      = lipgloss.NewStyle().Foreground(colorOrange)
