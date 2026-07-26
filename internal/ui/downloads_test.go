@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -387,8 +388,8 @@ func playerModel(t *testing.T, files []db.File) (*downloadsModel, *[]string) {
 	return &downloadsModel{
 		pane:  paneFiles,
 		files: files,
-		openFile: func(path string) error {
-			*opened = append(*opened, path)
+		openFile: func(paths []string) error {
+			*opened = append(*opened, paths...)
 			return nil
 		},
 	}, opened
@@ -420,6 +421,77 @@ func TestEnterPlaysDownloadedFile(t *testing.T) {
 	m.update(msg)
 	if !strings.Contains(m.notice, "playing e2.mkv") {
 		t.Fatalf("notice = %q, want playing confirmation", m.notice)
+	}
+}
+
+func TestEnterQueuesLaterSiblingsAsPlaylist(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "featurettes")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := []db.File{
+		{LocalPath: filepath.Join(dir, "e4.mkv"), Status: db.FileDone, Wanted: true},
+		{LocalPath: filepath.Join(dir, "e5.mkv"), Status: db.FileDone, Wanted: true},
+		{LocalPath: filepath.Join(dir, "e6.mkv"), Status: db.FileDone, Wanted: true},
+		{LocalPath: filepath.Join(dir, "e7.mkv"), Status: db.FilePending, Wanted: true},
+		{LocalPath: filepath.Join(dir, "e8.mkv"), Status: db.FileSkipped, Wanted: true},
+		{LocalPath: filepath.Join(dir, "season.nfo"), Status: db.FileDone, Wanted: true},
+		{LocalPath: filepath.Join(sub, "bloopers.mkv"), Status: db.FileDone, Wanted: true},
+	}
+	for _, f := range files {
+		if f.Status == db.FilePending {
+			continue // e7 has not landed yet
+		}
+		if err := os.WriteFile(f.LocalPath, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, opened := playerModel(t, files)
+	m.fileCursor = 1 // e5
+
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on a downloaded file returned no command")
+	}
+	msg := cmd()
+	want := []string{
+		filepath.Join(dir, "e5.mkv"),
+		filepath.Join(dir, "e6.mkv"),
+		filepath.Join(dir, "e8.mkv"),
+	}
+	if !slices.Equal(*opened, want) {
+		t.Fatalf("opened files = %v, want %v", *opened, want)
+	}
+	m.update(msg)
+	if !strings.Contains(m.notice, "playing e5.mkv (+2 queued)") {
+		t.Fatalf("notice = %q, want queued-count confirmation", m.notice)
+	}
+}
+
+func TestEnterOnPartialQueuesNothingUnplayable(t *testing.T) {
+	dir := t.TempDir()
+	partial := filepath.Join(dir, ".megatmp.h1")
+	sibling := filepath.Join(dir, "e2.mkv")
+	for _, p := range []string{partial, sibling} {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, opened := playerModel(t, []db.File{
+		{NodeHandle: "h1", LocalPath: filepath.Join(dir, "e1.mkv"),
+			Status: db.FilePending, Wanted: true},
+		{LocalPath: sibling, Status: db.FileDone, Wanted: true},
+	})
+
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on an incomplete file returned no command")
+	}
+	cmd()
+	want := []string{partial, sibling}
+	if !slices.Equal(*opened, want) {
+		t.Fatalf("opened files = %v, want %v", *opened, want)
 	}
 }
 
@@ -477,7 +549,7 @@ func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
 	m := &downloadsModel{
 		pane:  paneFiles,
 		files: []db.File{{LocalPath: path, Status: db.FileDone, Wanted: true}},
-		openFile: func(string) error {
+		openFile: func([]string) error {
 			return errors.New("mpv executable not found")
 		},
 	}

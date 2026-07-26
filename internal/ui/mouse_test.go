@@ -202,8 +202,8 @@ func filePaneModel(t *testing.T, dir string) (*downloadsModel, *[]string) {
 				Size: 10, Status: db.FileDone, Wanted: true},
 		},
 		filesFor: 7,
-		openFile: func(path string) error {
-			*opened = append(*opened, path)
+		openFile: func(paths []string) error {
+			*opened = append(*opened, paths...)
 			return nil
 		},
 	}

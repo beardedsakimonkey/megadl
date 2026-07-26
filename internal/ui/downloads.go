@@ -55,9 +55,9 @@ type downloadsModel struct {
 	listW, filesW, paneHeight int
 	clicks                    clickTracker
 
-	// openFile plays a downloaded file; nil means openInMPV. Test seam so
-	// tests never spawn a real player.
-	openFile func(path string) error
+	// openFile plays a downloaded file plus any queued playlist entries;
+	// nil means openInMPV. Test seam so tests never spawn a real player.
+	openFile func(paths []string) error
 }
 
 // listingMergedMsg reports a finished remote-listing refresh.
@@ -68,8 +68,9 @@ type listingMergedMsg struct {
 
 // fileOpenedMsg reports the result of spawning a player for a file.
 type fileOpenedMsg struct {
-	name string
-	err  error
+	name   string
+	queued int // sibling files autoplaying after it
+	err    error
 }
 
 func newDownloadsModel(app *App) downloadsModel {
@@ -179,9 +180,12 @@ func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
 	}
 
 	if res, ok := msg.(fileOpenedMsg); ok {
-		if res.err != nil {
+		switch {
+		case res.err != nil:
 			m.notice = "play failed: " + res.err.Error()
-		} else {
+		case res.queued > 0:
+			m.notice = fmt.Sprintf("playing %s (+%d queued)", res.name, res.queued)
+		default:
 			m.notice = "playing " + res.name
 		}
 		return nil
@@ -426,7 +430,9 @@ func (m *downloadsModel) refreshListing() tea.Cmd {
 
 // openSelectedFile plays the highlighted file: the final path once it is
 // complete, otherwise the `.megatmp.<handle>` partial, which already holds
-// decrypted plaintext from the start of the file.
+// decrypted plaintext from the start of the file. Later media files sitting
+// in the same directory are queued behind it so a folder of episodes keeps
+// playing; see playlistTail.
 func (m *downloadsModel) openSelectedFile() tea.Cmd {
 	if m.fileCursor >= len(m.files) {
 		return nil
@@ -442,24 +448,70 @@ func (m *downloadsModel) openSelectedFile() tea.Cmd {
 		path = filepath.Join(filepath.Dir(f.LocalPath), ".megatmp."+f.NodeHandle)
 		name += " (partial)"
 	}
+	queued := playlistTail(m.files, m.fileCursor)
 	return func() tea.Msg {
 		if _, err := os.Stat(path); err != nil {
 			return fileOpenedMsg{err: errors.New(name + " is not on disk yet")}
 		}
-		return fileOpenedMsg{name: name, err: open(path)}
+		return fileOpenedMsg{
+			name:   name,
+			queued: len(queued),
+			err:    open(append([]string{path}, queued...)),
+		}
 	}
 }
 
-// openInMPV plays path in a detached mpv. It executes the binary directly —
+// playlistTail returns the paths to autoplay after files[i]. Entries are the
+// media files that follow it in listing order and live in the same directory
+// — subdirectories like "featurettes" are deliberately left out — and that are
+// fully on disk, since a partial would cut playback off mid-file. A file that
+// is not yet downloaded is skipped rather than ending the playlist.
+func playlistTail(files []db.File, i int) []string {
+	if i < 0 || i >= len(files) || !isMediaFile(files[i].LocalPath) {
+		return nil
+	}
+	dir := filepath.Dir(files[i].LocalPath)
+	var paths []string
+	for _, f := range files[i+1:] {
+		if f.Status != db.FileDone && f.Status != db.FileSkipped {
+			continue
+		}
+		if filepath.Dir(f.LocalPath) != dir || !isMediaFile(f.LocalPath) {
+			continue
+		}
+		if _, err := os.Stat(f.LocalPath); err != nil {
+			continue
+		}
+		paths = append(paths, f.LocalPath)
+	}
+	return paths
+}
+
+// mediaExts are the extensions worth autoplaying; it keeps artwork, subtitles
+// and .nfo sidecars out of the queue.
+var mediaExts = map[string]bool{
+	".avi": true, ".flv": true, ".m2ts": true, ".m4v": true, ".mkv": true,
+	".mov": true, ".mp4": true, ".mpeg": true, ".mpg": true, ".ogv": true,
+	".ts": true, ".webm": true, ".wmv": true,
+	".aac": true, ".flac": true, ".m4a": true, ".mp3": true, ".ogg": true,
+	".opus": true, ".wav": true, ".wma": true,
+}
+
+func isMediaFile(path string) bool {
+	return mediaExts[strings.ToLower(filepath.Ext(path))]
+}
+
+// openInMPV plays paths in a detached mpv, the first as the current file and
+// the rest as queued playlist entries. It executes the binary directly —
 // LaunchServices (`open -a`) adds seconds of startup latency — and puts it in
 // its own session with no stdio, so the TUI keeps the terminal and playback
 // survives megadl exiting or receiving ctrl+c.
-func openInMPV(path string) error {
+func openInMPV(paths []string) error {
 	bin := findMPV()
 	if bin == "" {
 		return errors.New("mpv executable not found")
 	}
-	cmd := exec.Command(bin, path)
+	cmd := exec.Command(bin, paths...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return err
