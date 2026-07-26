@@ -564,6 +564,155 @@ func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
 	}
 }
 
+// toggleTestApp builds an app around one queued folder download with two
+// wanted files, focused on the first row.
+func toggleTestApp(t *testing.T) (*App, *db.DB, int64) {
+	t.Helper()
+	app, database := openAddlinkTestApp(t)
+	app.eng = engine.New(nil, database)
+	id, err := database.InsertDownload(&db.Download{
+		URL: "u", Handle: "h", LinkType: "folder", Name: "Folder",
+		DestPath: "/dl/Folder",
+	}, []db.File{
+		{NodeHandle: "a", RemotePath: "/Folder/a", LocalPath: "/dl/Folder/a", Wanted: true},
+		{NodeHandle: "b", RemotePath: "/Folder/b", LocalPath: "/dl/Folder/b", Wanted: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.downloads.reload()
+	return app, database, id
+}
+
+func pressKey(m *downloadsModel, key string) {
+	m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+}
+
+func TestStopKeyTogglesDownloadBetweenStoppedAndQueued(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+	m := &app.downloads
+
+	pressKey(m, "s")
+	if dl, err := database.Download(id); err != nil || dl.Status != db.StatusStopped {
+		t.Fatalf("status after first s = %v (err %v), want %q", dl, err, db.StatusStopped)
+	}
+
+	m.reload()
+	pressKey(m, "s")
+	if dl, err := database.Download(id); err != nil || dl.Status != db.StatusQueued {
+		t.Fatalf("status after second s = %v (err %v), want %q", dl, err, db.StatusQueued)
+	}
+}
+
+func TestStopKeyOnCompletedDownloadNotices(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+	if err := database.MarkCompleted(id, db.StatusDone); err != nil {
+		t.Fatal(err)
+	}
+	m := &app.downloads
+	m.reload()
+
+	pressKey(m, "s")
+	if !strings.Contains(m.notice, "already complete") {
+		t.Fatalf("notice = %q, want already-complete notice", m.notice)
+	}
+	if dl, _ := database.Download(id); dl.Status != db.StatusDone {
+		t.Fatalf("status = %q, want it left alone", dl.Status)
+	}
+}
+
+func TestStopKeyTogglesFileWantedWhileDownloadRuns(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+	m := &app.downloads
+	m.pane = paneFiles
+	fileID := m.files[0].ID
+
+	pressKey(m, "s")
+	if f, err := database.File(fileID); err != nil || f.Wanted {
+		t.Fatalf("file after first s = %v (err %v), want unwanted", f, err)
+	}
+
+	pressKey(m, "s")
+	if f, err := database.File(fileID); err != nil || !f.Wanted {
+		t.Fatalf("file after second s = %v (err %v), want wanted", f, err)
+	}
+	if dl, _ := database.Download(id); dl.Status != db.StatusQueued {
+		t.Fatalf("download status = %q, want %q", dl.Status, db.StatusQueued)
+	}
+}
+
+// A wanted file in a stopped download reads as "not started", so s starts the
+// download rather than dropping the file from the wanted set.
+func TestStopKeyOnFileOfStoppedDownloadStartsIt(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+	if err := database.SetStatus(id, db.StatusStopped, ""); err != nil {
+		t.Fatal(err)
+	}
+	m := &app.downloads
+	m.reload()
+	m.pane = paneFiles
+	fileID := m.files[0].ID
+
+	pressKey(m, "s")
+	if f, _ := database.File(fileID); !f.Wanted {
+		t.Fatalf("file = %v, want still wanted", f)
+	}
+	if dl, _ := database.Download(id); dl.Status != db.StatusQueued {
+		t.Fatalf("download status = %q, want %q", dl.Status, db.StatusQueued)
+	}
+}
+
+func TestStopKeyOnDownloadedFileNotices(t *testing.T) {
+	app, database, _ := toggleTestApp(t)
+	m := &app.downloads
+	m.pane = paneFiles
+	if err := database.SetFileStatusByHandle(m.rows[0].ID, "a", db.FileDone); err != nil {
+		t.Fatal(err)
+	}
+	m.reload()
+	fileID := m.files[0].ID
+
+	pressKey(m, "s")
+	if !strings.Contains(m.notice, "already downloaded") {
+		t.Fatalf("notice = %q, want already-downloaded notice", m.notice)
+	}
+	if f, _ := database.File(fileID); !f.Wanted {
+		t.Fatalf("file = %v, want left wanted", f)
+	}
+}
+
+func TestToggleLabelFollowsSelection(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+	m := &app.downloads
+
+	if got := m.toggleLabel(); got != "stop" {
+		t.Fatalf("label for queued download = %q, want %q", got, "stop")
+	}
+	if err := database.SetStatus(id, db.StatusStopped, ""); err != nil {
+		t.Fatal(err)
+	}
+	m.reload()
+	if got := m.toggleLabel(); got != "start" {
+		t.Fatalf("label for stopped download = %q, want %q", got, "start")
+	}
+
+	if err := database.SetStatus(id, db.StatusQueued, ""); err != nil {
+		t.Fatal(err)
+	}
+	m.reload()
+	m.pane = paneFiles
+	if got := m.toggleLabel(); got != "stop" {
+		t.Fatalf("label for wanted file = %q, want %q", got, "stop")
+	}
+	if err := database.SetFileWanted(m.files[0].ID, false); err != nil {
+		t.Fatal(err)
+	}
+	m.reload()
+	if got := m.toggleLabel(); got != "start" {
+		t.Fatalf("label for unwanted file = %q, want %q", got, "start")
+	}
+}
+
 func TestDownloadsRememberLastSelectedFilePerFolder(t *testing.T) {
 	app, database := openAddlinkTestApp(t)
 	firstID, err := database.InsertDownload(&db.Download{

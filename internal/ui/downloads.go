@@ -229,33 +229,7 @@ func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
 		case "enter":
 			return m.openSelectedFile()
 		case "s":
-			if m.fileCursor < len(m.files) {
-				f := m.files[m.fileCursor]
-				switch {
-				case f.Status == db.FileDone || f.Status == db.FileSkipped:
-					m.notice = "file already downloaded"
-				case !f.Wanted:
-					m.notice = "file already stopped"
-				default:
-					m.app.eng.StopFile(f.ID)
-					m.reload()
-				}
-			}
-		case "r":
-			if m.fileCursor < len(m.files) && m.cursor < len(m.rows) {
-				f := m.files[m.fileCursor]
-				dl := m.rows[m.cursor]
-				switch {
-				case f.Status == db.FileDone || f.Status == db.FileSkipped:
-					m.notice = "file already downloaded"
-				case f.Wanted && f.Status == db.FilePending &&
-					(dl.Status == db.StatusQueued || dl.Status == db.StatusRunning):
-					m.notice = "file is already queued"
-				default:
-					m.app.eng.ResumeFile(f.ID)
-					m.reload()
-				}
-			}
+			m.toggleFile()
 		case "esc", "left", "h":
 			m.pane = paneList
 		}
@@ -278,13 +252,7 @@ func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
 			m.pane = paneFiles
 		}
 	case "s":
-		if m.cursor < len(m.rows) {
-			m.app.eng.Stop(m.rows[m.cursor].ID)
-		}
-	case "r":
-		if m.cursor < len(m.rows) {
-			m.app.eng.Resume(m.rows[m.cursor].ID)
-		}
+		m.toggleDownload()
 	case "x":
 		if m.cursor < len(m.rows) {
 			if m.rows[m.cursor].ID == m.app.eng.ActiveID() {
@@ -299,6 +267,52 @@ func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// running reports whether dl is working through its queue right now, and so
+// whether stopping is the meaningful half of the toggle for it and its files.
+// A download stalled on quota is still active, so it counts as running.
+func (m *downloadsModel) running(dl *db.Download) bool {
+	return dl.ID == m.app.eng.ActiveID() ||
+		dl.Status == db.StatusQueued || dl.Status == db.StatusRunning
+}
+
+// toggleDownload stops the selected download if it is running, and starts it
+// otherwise.
+func (m *downloadsModel) toggleDownload() {
+	if m.cursor >= len(m.rows) {
+		return
+	}
+	dl := m.rows[m.cursor]
+	switch {
+	case m.running(dl):
+		m.app.eng.Stop(dl.ID)
+	case dl.Status == db.StatusDone:
+		m.notice = "download already complete"
+	default:
+		m.app.eng.Resume(dl.ID)
+	}
+}
+
+// toggleFile stops the selected file if it is on track to be fetched, and
+// starts it otherwise. A file only counts as started when its download is
+// running too, so pressing s inside a stopped download starts that download
+// as well rather than dropping the file from its wanted set.
+func (m *downloadsModel) toggleFile() {
+	if m.fileCursor >= len(m.files) || m.cursor >= len(m.rows) {
+		return
+	}
+	f := m.files[m.fileCursor]
+	switch {
+	case f.Status == db.FileDone || f.Status == db.FileSkipped:
+		m.notice = "file already downloaded"
+	case f.Wanted && m.running(m.rows[m.cursor]):
+		m.app.eng.StopFile(f.ID)
+		m.reload()
+	default:
+		m.app.eng.ResumeFile(f.ID)
+		m.reload()
+	}
 }
 
 // mouse routes a click or wheel notch to the pane under the pointer. Its
@@ -556,8 +570,7 @@ func (m *downloadsModel) help() string {
 		return renderShortcuts(
 			shortcut{keys: []string{"j/k"}, label: "move"},
 			shortcut{keys: []string{"⏎"}, label: "play"},
-			shortcut{keys: []string{"r"}, label: "resume file"},
-			shortcut{keys: []string{"s"}, label: "stop file"},
+			shortcut{keys: []string{"s"}, label: m.toggleLabel() + " file"},
 			shortcut{keys: []string{"R"}, label: "refresh listing"},
 			shortcut{keys: []string{"esc"}, label: "back"},
 			shortcut{keys: []string{"q"}, label: "quit"},
@@ -566,13 +579,28 @@ func (m *downloadsModel) help() string {
 	return renderShortcuts(
 		shortcut{keys: []string{"a"}, label: "add"},
 		shortcut{keys: []string{"⏎"}, label: "files"},
-		shortcut{keys: []string{"s"}, label: "stop"},
-		shortcut{keys: []string{"r"}, label: "resume"},
+		shortcut{keys: []string{"s"}, label: m.toggleLabel()},
 		shortcut{keys: []string{"R"}, label: "refresh"},
 		shortcut{keys: []string{"x"}, label: "remove"},
 		shortcut{keys: []string{"y"}, label: "copy url"},
 		shortcut{keys: []string{"q"}, label: "quit"},
 	)
+}
+
+// toggleLabel names the half of the s toggle that applies to what the cursor
+// is on, so the footer says what pressing it will do.
+func (m *downloadsModel) toggleLabel() string {
+	if m.cursor >= len(m.rows) {
+		return "stop"
+	}
+	running := m.running(m.rows[m.cursor])
+	if m.pane == paneFiles && m.fileCursor < len(m.files) {
+		running = running && m.files[m.fileCursor].Wanted
+	}
+	if running {
+		return "stop"
+	}
+	return "start"
 }
 
 func (m *downloadsModel) view(width, height int) string {
