@@ -30,7 +30,7 @@ func renameTestApp(t *testing.T) (*App, *db.DB, int64) {
 		URL: "u", Handle: "h", LinkType: "folder", Name: "Show", DestPath: dest,
 	}, []db.File{{
 		NodeHandle: "a", RemotePath: "/Show/s1/a.mkv",
-		LocalPath: filepath.Join(dest, "s1", "a.mkv"), Wanted: true,
+		LocalPath: filepath.Join(dest, "s1", "a.mkv"), Queued: true,
 	}})
 	if err != nil {
 		t.Fatal(err)

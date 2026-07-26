@@ -40,7 +40,7 @@ func TestDownloadRowOmitsCreationDate(t *testing.T) {
 	m := &downloadsModel{pane: paneList, app: NewApp(nil, nil, nil, nil)}
 	dl := &db.Download{
 		Name:       "Show",
-		Status:     db.StatusQueued,
+		Status:     db.StatusPending,
 		TotalBytes: 1024,
 		CreatedAt:  time.Date(2026, time.July, 23, 0, 0, 0, 0, time.UTC),
 	}
@@ -58,7 +58,7 @@ func TestDownloadRowOmitsSize(t *testing.T) {
 	m := &downloadsModel{pane: paneList, app: NewApp(nil, nil, nil, nil)}
 	dl := &db.Download{
 		Name:       "Show",
-		Status:     db.StatusQueued,
+		Status:     db.StatusPending,
 		TotalBytes: 1024,
 	}
 
@@ -72,69 +72,119 @@ func TestDownloadRowOmitsSize(t *testing.T) {
 	}
 }
 
-func TestFileMarkerShowsPartialProgress(t *testing.T) {
+func TestFileMarker(t *testing.T) {
 	tests := []struct {
 		name     string
 		file     db.File
 		fetching bool
+		paused   bool
 		frac     float64
 		wantText string
 		want     string
 	}{
-		{name: "unwanted no partial", file: db.File{Status: db.FilePending}, wantText: "○", want: styleDim.Render("○")},
-		{name: "unwanted partial", file: db.File{Status: db.FilePending}, frac: 0.3, wantText: "◔", want: stylePartial.Render("◔")},
-		{name: "wanted partial", file: db.File{Wanted: true, Status: db.FilePending}, frac: 0.3, wantText: "◔", want: stylePartial.Render("◔")},
-		{name: "wanted no partial", file: db.File{Wanted: true, Status: db.FilePending}, wantText: "·", want: styleDim.Render("·")},
-		{name: "error keeps cross despite partial", file: db.File{Wanted: true, Status: db.FileError}, frac: 0.3, wantText: "✗", want: styleError.Render("✗")},
-		{name: "fetching spins", file: db.File{Wanted: true, Status: db.FilePending}, fetching: true, frac: 0.3, wantText: "⠋", want: styleSpinner.Render("⠋")},
-		{name: "done keeps check", file: db.File{Wanted: true, Status: db.FileDone}, frac: 1, wantText: "✓", want: styleOK.Render("✓")},
+		{name: "not queued, nothing on disk", file: db.File{Status: db.FilePending},
+			wantText: emptyGlyph, want: styleDim.Render(emptyGlyph)},
+		{name: "not queued, part on disk", file: db.File{Status: db.FilePending}, frac: 0.3,
+			wantText: partialGlyph, want: stylePartial.Render(partialGlyph)},
+		{name: "queued says so rather than showing progress",
+			file: db.File{Queued: true, Status: db.FilePending}, frac: 0.3,
+			wantText: queuedGlyph, want: styleDim.Render(queuedGlyph)},
+		{name: "queued, nothing on disk yet", file: db.File{Queued: true, Status: db.FilePending},
+			wantText: queuedGlyph, want: styleDim.Render(queuedGlyph)},
+		{name: "the file a paused queue holds at", file: db.File{Queued: true, Status: db.FilePending},
+			paused: true, frac: 0.3, wantText: pausedGlyph, want: styleWarn.Render(pausedGlyph)},
+		{name: "error keeps cross despite partial", file: db.File{Status: db.FileError}, frac: 0.3,
+			wantText: "✗", want: styleError.Render("✗")},
+		{name: "fetching spins", file: db.File{Queued: true, Status: db.FilePending},
+			fetching: true, frac: 0.3, wantText: "⠋", want: styleSpinner.Render("⠋")},
+		{name: "done keeps check", file: db.File{Queued: true, Status: db.FileDone}, frac: 1,
+			wantText: "✓", want: styleOK.Render("✓")},
+		{name: "already on disk counts as done", file: db.File{Status: db.FileSkipped},
+			wantText: "✓", want: styleOK.Render("✓")},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := fileMarkerText(tt.file, tt.fetching, tt.frac, "⠋"); got != tt.wantText {
+			st := fileMarkerStateOf(tt.file, tt.fetching, tt.paused, tt.frac)
+			if got := fileMarkerText(st, "⠋"); got != tt.wantText {
 				t.Fatalf("fileMarkerText() = %q, want %q", got, tt.wantText)
 			}
-			if got := fileMarker(tt.file, tt.fetching, tt.frac, "⠋"); got != tt.want {
+			if got := fileMarker(st, "⠋"); got != tt.want {
 				t.Fatalf("fileMarker() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-// The list column budgets exactly one cell for the status marker, so a glyph
-// that renders wider would shift every name in the pane.
-func TestStatusIconIsOneCellWide(t *testing.T) {
-	statuses := []string{db.StatusQueued, db.StatusRunning, db.StatusStopped,
-		db.StatusDone, db.StatusError, db.StatusQuota, "somethingelse"}
-	for _, status := range statuses {
-		for _, active := range []bool{false, true} {
-			for _, partial := range []bool{false, true} {
-				got := statusIconText(status, active, partial, "⠋")
-				if w := lipgloss.Width(got); w != 1 {
-					t.Errorf("statusIconText(%q, active=%v, partial=%v) = %q, width %d, want 1",
-						status, active, partial, got, w)
-				}
+func TestDownloadMarker(t *testing.T) {
+	tests := []struct {
+		name     string
+		state    dlMarkerState
+		wantText string
+		want     string
+	}{
+		{name: "fetching now", state: dlMarkerState{active: true, queued: true, head: true},
+			wantText: "⠋", want: styleSpinner.Render("⠋")},
+		{name: "head of a paused queue",
+			state:    dlMarkerState{queued: true, head: true, paused: true, anyBytes: true},
+			wantText: pausedGlyph, want: styleWarn.Render(pausedGlyph)},
+		{name: "waiting behind the head of a paused queue",
+			state:    dlMarkerState{queued: true, paused: true},
+			wantText: queuedGlyph, want: styleDim.Render(queuedGlyph)},
+		{name: "waiting its turn", state: dlMarkerState{queued: true, anyBytes: true},
+			wantText: queuedGlyph, want: styleDim.Render(queuedGlyph)},
+		{name: "whole folder on disk", state: dlMarkerState{complete: true, anyBytes: true},
+			wantText: "✓", want: styleOK.Render("✓")},
+		{name: "part of the folder on disk", state: dlMarkerState{anyBytes: true},
+			wantText: partialGlyph, want: stylePartial.Render(partialGlyph)},
+		{name: "failed before anything landed", state: dlMarkerState{failed: true},
+			wantText: "✗", want: styleError.Render("✗")},
+		{name: "failed after part of it landed", state: dlMarkerState{failed: true, anyBytes: true},
+			wantText: partialGlyph, want: stylePartial.Render(partialGlyph)},
+		{name: "nothing on disk", state: dlMarkerState{},
+			wantText: emptyGlyph, want: styleDim.Render(emptyGlyph)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := dlMarkerText(tt.state, "⠋"); got != tt.wantText {
+				t.Fatalf("dlMarkerText() = %q, want %q", got, tt.wantText)
 			}
-		}
+			if got := dlMarker(tt.state, "⠋"); got != tt.want {
+				t.Fatalf("dlMarker() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-// A finished download that only covers part of its folder must not claim the
-// whole folder is on disk.
-func TestStatusIconMarksPartiallyFinishedDownloads(t *testing.T) {
-	if got := statusIconText(db.StatusDone, false, false, "⠋"); got != "✓" {
-		t.Errorf("complete download = %q, want ✓", got)
+// Both columns budget exactly one cell for the marker, so a glyph that renders
+// wider would shift every name in the pane.
+func TestMarkersAreOneCellWide(t *testing.T) {
+	for _, glyph := range []string{pausedGlyph, queuedGlyph, partialGlyph, emptyGlyph, "✓", "✗"} {
+		if w := lipgloss.Width(glyph); w != 1 {
+			t.Errorf("glyph %q is %d cells wide, want 1", glyph, w)
+		}
 	}
-	if got := statusIconText(db.StatusDone, false, true, "⠋"); got != "◔" {
-		t.Errorf("partial download = %q, want ◔", got)
-	}
-	if got := statusIcon(db.StatusDone, false, true, "⠋"); got != stylePartial.Render("◔") {
-		t.Errorf("partial download = %q, want it styled as partial", got)
-	}
-	// the spinner still wins while the engine is on this row
-	if got := statusIcon(db.StatusDone, true, true, "⠋"); got != styleSpinner.Render("⠋") {
-		t.Errorf("active download = %q, want the spinner frame", got)
+	// and every combination of state reaches one of them
+	for _, active := range []bool{false, true} {
+		for _, paused := range []bool{false, true} {
+			for _, head := range []bool{false, true} {
+				for _, queued := range []bool{false, true} {
+					for _, complete := range []bool{false, true} {
+						for _, anyBytes := range []bool{false, true} {
+							for _, failed := range []bool{false, true} {
+								st := dlMarkerState{active: active, paused: paused,
+									head: head, queued: queued, complete: complete,
+									anyBytes: anyBytes, failed: failed}
+								if got := dlMarkerText(st, "⠋"); lipgloss.Width(got) != 1 {
+									t.Errorf("dlMarkerText(%+v) = %q, want one cell", st, got)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -211,16 +261,16 @@ func TestFileRowShowsProgressBarColumn(t *testing.T) {
 		bar  string
 		pct  string
 	}{
-		{"undownloaded", db.File{ID: 1, LocalPath: "/dl/e1.mkv", Size: 100, Status: db.FilePending, Wanted: true},
+		{"undownloaded", db.File{ID: 1, LocalPath: "/dl/e1.mkv", Size: 100, Status: db.FilePending, Queued: true},
 			strings.Repeat("─", 10), "  0%"},
-		{"half fetched", db.File{ID: 2, LocalPath: "/dl/e2.mkv", Size: 100, Status: db.FilePending, Wanted: true},
+		{"half fetched", db.File{ID: 2, LocalPath: "/dl/e2.mkv", Size: 100, Status: db.FilePending, Queued: true},
 			strings.Repeat("━", 5) + strings.Repeat("─", 5), " 50%"},
-		{"done", db.File{ID: 3, LocalPath: "/dl/e3.mkv", Size: 100, Status: db.FileDone, Wanted: true},
+		{"done", db.File{ID: 3, LocalPath: "/dl/e3.mkv", Size: 100, Status: db.FileDone, Queued: true},
 			strings.Repeat("━", 10), "100%"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ansi.Strip(m.fileRowView(tt.file, dl, engine.Snapshot{}, false, 0, 60, 5))
+			got := ansi.Strip(m.fileRowView(tt.file, dl, engine.Snapshot{}, 0, false, 0, 60, 5))
 			want := tt.bar + " " + tt.pct
 			if !strings.Contains(got, want) {
 				t.Fatalf("file row = %q, want progress %q", got, want)
@@ -231,9 +281,9 @@ func TestFileRowShowsProgressBarColumn(t *testing.T) {
 
 func TestFileRowKeepsBarWhenSelected(t *testing.T) {
 	m := &downloadsModel{pane: paneFiles, partials: map[int64]int64{2: 50}}
-	f := db.File{ID: 2, LocalPath: "/dl/e2.mkv", Size: 100, Status: db.FilePending, Wanted: true}
+	f := db.File{ID: 2, LocalPath: "/dl/e2.mkv", Size: 100, Status: db.FilePending, Queued: true}
 
-	got := ansi.Strip(m.fileRowView(f, &db.Download{ID: 7}, engine.Snapshot{}, true, 0, 60, 5))
+	got := ansi.Strip(m.fileRowView(f, &db.Download{ID: 7}, engine.Snapshot{}, 0, true, 0, 60, 5))
 	if !strings.Contains(got, strings.Repeat("━", 5)+strings.Repeat("─", 5)+"  50%") {
 		t.Fatalf("selected file row lost its bar: %q", got)
 	}
@@ -241,9 +291,9 @@ func TestFileRowKeepsBarWhenSelected(t *testing.T) {
 
 func TestFileRowHidesProgressBarAndPercentageTogether(t *testing.T) {
 	m := &downloadsModel{partials: map[int64]int64{2: 50}}
-	f := db.File{ID: 2, LocalPath: "/dl/episode.mkv", Size: 100, Status: db.FilePending, Wanted: true}
+	f := db.File{ID: 2, LocalPath: "/dl/episode.mkv", Size: 100, Status: db.FilePending, Queued: true}
 
-	got := ansi.Strip(m.fileRowView(f, &db.Download{ID: 7}, engine.Snapshot{}, false, 0, 25, 5))
+	got := ansi.Strip(m.fileRowView(f, &db.Download{ID: 7}, engine.Snapshot{}, 0, false, 0, 25, 5))
 	if strings.ContainsAny(got, "━─%") {
 		t.Fatalf("narrow file row retained part of its progress display: %q", got)
 	}
@@ -321,8 +371,8 @@ func TestFilesViewRendersDirectoryTree(t *testing.T) {
 		rows: []*db.Download{{ID: 7, Name: "Skins", DestPath: "/dl/Skins",
 			Status: db.StatusDone, TotalBytes: 100}},
 		files: []db.File{
-			{LocalPath: "/dl/Skins/Season 01/Skins - S01E01.mkv", Size: 50, Wanted: true},
-			{LocalPath: "/dl/Skins/Season 01/Skins - S01E02.mkv", Size: 50, Wanted: true},
+			{LocalPath: "/dl/Skins/Season 01/Skins - S01E01.mkv", Size: 50, Queued: true},
+			{LocalPath: "/dl/Skins/Season 01/Skins - S01E02.mkv", Size: 50, Queued: true},
 		},
 	}
 	got := ansi.Strip(m.filesView(60, 10))
@@ -349,7 +399,7 @@ func TestFilesViewRendersDirectoryTree(t *testing.T) {
 	// file rows are indented one level under their folder header; both sit
 	// past the pane gutter and the two-cell cursor column, which carries the
 	// bar on the cursor row (S01E01 here)
-	if !strings.HasPrefix(file, "│ ▌   · ") {
+	if !strings.HasPrefix(file, "│ ▌   "+queuedGlyph+" ") {
 		t.Fatalf("file row is not indented under its folder: %q", file)
 	}
 	if !strings.HasPrefix(header, "│   Season 01/") {
@@ -364,7 +414,7 @@ func TestFilesViewMeasuresProgressAgainstWholeFolder(t *testing.T) {
 		app:  &App{eng: engine.New(nil, nil)},
 		rows: []*db.Download{{ID: 7, Name: "Show", Status: db.StatusDone, TotalBytes: 100}},
 		files: []db.File{
-			{Size: 100, Status: db.FileDone, Wanted: true},
+			{Size: 100, Status: db.FileDone, Queued: true},
 			{Size: 100, Status: db.FilePending},
 		},
 	}
@@ -396,15 +446,15 @@ func TestPartialSizesStatsUnfinishedFilesOnly(t *testing.T) {
 	}
 }
 
-// A stopped download still shows a half-filled bar on a half-fetched file
-// and counts its on-disk bytes toward the folder total.
-func TestFilesViewShowsPartialProgressWhenStopped(t *testing.T) {
+// A download that is not being fetched still shows a half-filled bar on a
+// half-fetched file, and counts its on-disk bytes toward the folder total.
+func TestFilesViewShowsPartialProgressWhenIdle(t *testing.T) {
 	m := &downloadsModel{
 		app: &App{eng: engine.New(nil, nil)},
 		rows: []*db.Download{{ID: 7, Name: "Show", DestPath: "/dl/Show",
-			Status: db.StatusStopped, TotalBytes: 100}},
+			Status: db.StatusPending, TotalBytes: 100}},
 		files: []db.File{
-			{ID: 1, LocalPath: "/dl/Show/e1.mkv", Size: 100, Status: db.FilePending, Wanted: true},
+			{ID: 1, LocalPath: "/dl/Show/e1.mkv", Size: 100, Status: db.FilePending, Queued: true},
 		},
 		partials: map[int64]int64{1: 50},
 	}
@@ -446,8 +496,8 @@ func TestEnterPlaysDownloadedFile(t *testing.T) {
 		}
 	}
 	m, opened := playerModel(t, []db.File{
-		{LocalPath: done, Status: db.FileDone, Wanted: true},
-		{LocalPath: skipped, Status: db.FileSkipped, Wanted: true},
+		{LocalPath: done, Status: db.FileDone, Queued: true},
+		{LocalPath: skipped, Status: db.FileSkipped, Queued: true},
 	})
 	m.fileCursor = 1
 
@@ -472,13 +522,13 @@ func TestEnterQueuesLaterSiblingsAsPlaylist(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := []db.File{
-		{LocalPath: filepath.Join(dir, "e4.mkv"), Status: db.FileDone, Wanted: true},
-		{LocalPath: filepath.Join(dir, "e5.mkv"), Status: db.FileDone, Wanted: true},
-		{LocalPath: filepath.Join(dir, "e6.mkv"), Status: db.FileDone, Wanted: true},
-		{LocalPath: filepath.Join(dir, "e7.mkv"), Status: db.FilePending, Wanted: true},
-		{LocalPath: filepath.Join(dir, "e8.mkv"), Status: db.FileSkipped, Wanted: true},
-		{LocalPath: filepath.Join(dir, "season.nfo"), Status: db.FileDone, Wanted: true},
-		{LocalPath: filepath.Join(sub, "bloopers.mkv"), Status: db.FileDone, Wanted: true},
+		{LocalPath: filepath.Join(dir, "e4.mkv"), Status: db.FileDone, Queued: true},
+		{LocalPath: filepath.Join(dir, "e5.mkv"), Status: db.FileDone, Queued: true},
+		{LocalPath: filepath.Join(dir, "e6.mkv"), Status: db.FileDone, Queued: true},
+		{LocalPath: filepath.Join(dir, "e7.mkv"), Status: db.FilePending, Queued: true},
+		{LocalPath: filepath.Join(dir, "e8.mkv"), Status: db.FileSkipped, Queued: true},
+		{LocalPath: filepath.Join(dir, "season.nfo"), Status: db.FileDone, Queued: true},
+		{LocalPath: filepath.Join(sub, "bloopers.mkv"), Status: db.FileDone, Queued: true},
 	}
 	for _, f := range files {
 		if f.Status == db.FilePending {
@@ -521,8 +571,8 @@ func TestEnterOnPartialQueuesNothingUnplayable(t *testing.T) {
 	}
 	m, opened := playerModel(t, []db.File{
 		{NodeHandle: "h1", LocalPath: filepath.Join(dir, "e1.mkv"),
-			Status: db.FilePending, Wanted: true},
-		{LocalPath: sibling, Status: db.FileDone, Wanted: true},
+			Status: db.FilePending, Queued: true},
+		{LocalPath: sibling, Status: db.FileDone, Queued: true},
 	})
 
 	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -544,7 +594,7 @@ func TestEnterPlaysPartialOfIncompleteFile(t *testing.T) {
 	}
 	m, opened := playerModel(t, []db.File{{
 		NodeHandle: "h1", LocalPath: filepath.Join(dir, "e1.mkv"),
-		Status: db.FilePending, Wanted: true,
+		Status: db.FilePending, Queued: true,
 	}})
 
 	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -564,7 +614,7 @@ func TestEnterPlaysPartialOfIncompleteFile(t *testing.T) {
 func TestEnterWithNothingOnDiskShowsNotice(t *testing.T) {
 	m, opened := playerModel(t, []db.File{{
 		NodeHandle: "h1", LocalPath: filepath.Join(t.TempDir(), "e1.mkv"),
-		Status: db.FilePending, Wanted: true,
+		Status: db.FilePending, Queued: true,
 	}})
 
 	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -589,7 +639,7 @@ func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
 	}
 	m := &downloadsModel{
 		pane:  paneFiles,
-		files: []db.File{{LocalPath: path, Status: db.FileDone, Wanted: true}},
+		files: []db.File{{LocalPath: path, Status: db.FileDone, Queued: true}},
 		openFile: func([]string) error {
 			return errors.New("mpv executable not found")
 		},
@@ -606,7 +656,7 @@ func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
 }
 
 // toggleTestApp builds an app around one queued folder download with two
-// wanted files, focused on the first row.
+// queued files, focused on the first row.
 func toggleTestApp(t *testing.T) (*App, *db.DB, int64) {
 	t.Helper()
 	app, database := openAddlinkTestApp(t)
@@ -615,8 +665,8 @@ func toggleTestApp(t *testing.T) (*App, *db.DB, int64) {
 		URL: "u", Handle: "h", LinkType: "folder", Name: "Folder",
 		DestPath: "/dl/Folder",
 	}, []db.File{
-		{NodeHandle: "a", RemotePath: "/Folder/a", LocalPath: "/dl/Folder/a", Wanted: true},
-		{NodeHandle: "b", RemotePath: "/Folder/b", LocalPath: "/dl/Folder/b", Wanted: true},
+		{NodeHandle: "a", RemotePath: "/Folder/a", LocalPath: "/dl/Folder/a", Queued: true},
+		{NodeHandle: "b", RemotePath: "/Folder/b", LocalPath: "/dl/Folder/b", Queued: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -629,24 +679,45 @@ func pressKey(m *downloadsModel, key string) {
 	m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
 }
 
-func TestStopKeyTogglesDownloadBetweenStoppedAndQueued(t *testing.T) {
+func queued(t *testing.T, database *db.DB, id int64) bool {
+	t.Helper()
+	queue, err := database.Queue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.Contains(queue, id)
+}
+
+func TestSKeyTogglesDownloadQueueMembership(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	m := &app.downloads
 
 	pressKey(m, "s")
-	if dl, err := database.Download(id); err != nil || dl.Status != db.StatusStopped {
-		t.Fatalf("status after first s = %v (err %v), want %q", dl, err, db.StatusStopped)
+	if queued(t, database, id) {
+		t.Fatal("download still queued after the first s")
+	}
+	files, _ := database.Files(id)
+	for _, f := range files {
+		if f.Queued {
+			t.Fatalf("file left queued after its download was: %+v", f)
+		}
 	}
 
 	m.reload()
 	pressKey(m, "s")
-	if dl, err := database.Download(id); err != nil || dl.Status != db.StatusQueued {
-		t.Fatalf("status after second s = %v (err %v), want %q", dl, err, db.StatusQueued)
+	if !queued(t, database, id) {
+		t.Fatal("download not queued again after the second s")
 	}
 }
 
-func TestStopKeyOnCompletedDownloadNotices(t *testing.T) {
+func TestSKeyOnCompletedDownloadNotices(t *testing.T) {
 	app, database, id := toggleTestApp(t)
+	// every file on disk, so there is nothing left to queue
+	for _, handle := range []string{"a", "b"} {
+		if err := database.SetFileStatusByHandle(id, handle, db.FileDone); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := database.MarkCompleted(id, db.StatusDone); err != nil {
 		t.Fatal(err)
 	}
@@ -657,36 +728,37 @@ func TestStopKeyOnCompletedDownloadNotices(t *testing.T) {
 	if !strings.Contains(m.notice, "already complete") {
 		t.Fatalf("notice = %q, want already-complete notice", m.notice)
 	}
-	if dl, _ := database.Download(id); dl.Status != db.StatusDone {
-		t.Fatalf("status = %q, want it left alone", dl.Status)
+	if queued(t, database, id) {
+		t.Fatal("completed download was put back in the queue")
 	}
 }
 
-func TestStopKeyTogglesFileWantedWhileDownloadRuns(t *testing.T) {
+func TestSKeyTogglesFileQueueMembership(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	m := &app.downloads
 	m.pane = paneFiles
 	fileID := m.files[0].ID
 
 	pressKey(m, "s")
-	if f, err := database.File(fileID); err != nil || f.Wanted {
-		t.Fatalf("file after first s = %v (err %v), want unwanted", f, err)
+	if f, err := database.File(fileID); err != nil || f.Queued {
+		t.Fatalf("file after first s = %v (err %v), want out of the queue", f, err)
+	}
+	// its sibling is still queued, so the download stays in the queue
+	if !queued(t, database, id) {
+		t.Fatal("download left the queue when only one of its files did")
 	}
 
 	pressKey(m, "s")
-	if f, err := database.File(fileID); err != nil || !f.Wanted {
-		t.Fatalf("file after second s = %v (err %v), want wanted", f, err)
-	}
-	if dl, _ := database.Download(id); dl.Status != db.StatusQueued {
-		t.Fatalf("download status = %q, want %q", dl.Status, db.StatusQueued)
+	if f, err := database.File(fileID); err != nil || !f.Queued {
+		t.Fatalf("file after second s = %v (err %v), want queued", f, err)
 	}
 }
 
-// A wanted file in a stopped download reads as "not started", so s starts the
-// download rather than dropping the file from the wanted set.
-func TestStopKeyOnFileOfStoppedDownloadStartsIt(t *testing.T) {
+// Queueing a single file is enough to put its download back in the queue,
+// without the file pane having to know anything about the download's state.
+func TestSKeyOnFileOfUnqueuedDownloadQueuesItAgain(t *testing.T) {
 	app, database, id := toggleTestApp(t)
-	if err := database.SetStatus(id, db.StatusStopped, ""); err != nil {
+	if err := database.SetDownloadQueued(id, false); err != nil {
 		t.Fatal(err)
 	}
 	m := &app.downloads
@@ -695,11 +767,55 @@ func TestStopKeyOnFileOfStoppedDownloadStartsIt(t *testing.T) {
 	fileID := m.files[0].ID
 
 	pressKey(m, "s")
-	if f, _ := database.File(fileID); !f.Wanted {
-		t.Fatalf("file = %v, want still wanted", f)
+	if f, _ := database.File(fileID); !f.Queued {
+		t.Fatalf("file = %v, want queued", f)
 	}
-	if dl, _ := database.Download(id); dl.Status != db.StatusQueued {
-		t.Fatalf("download status = %q, want %q", dl.Status, db.StatusQueued)
+	if !queued(t, database, id) {
+		t.Fatal("download not back in the queue")
+	}
+}
+
+// Pausing is the user's decision, so adding to the queue must not quietly
+// release it — but the notice has to say why nothing started.
+func TestQueueingWhilePausedExplainsItself(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+	if err := database.SetDownloadQueued(id, false); err != nil {
+		t.Fatal(err)
+	}
+	app.eng.SetPaused(true)
+	m := &app.downloads
+	m.reload()
+
+	pressKey(m, "s")
+	if !queued(t, database, id) {
+		t.Fatal("download not queued")
+	}
+	if !app.eng.Paused() {
+		t.Fatal("queueing released the pause")
+	}
+	if !strings.Contains(m.notice, "paused") {
+		t.Fatalf("notice = %q, want it to mention the pause", m.notice)
+	}
+}
+
+// p holds and releases the queue wherever the cursor happens to be.
+func TestPKeyTogglesPause(t *testing.T) {
+	app, database, _ := toggleTestApp(t)
+
+	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if !app.eng.Paused() {
+		t.Fatal("p did not pause the queue")
+	}
+	if paused, _, _ := database.Paused(); !paused {
+		t.Fatal("pause was not persisted")
+	}
+
+	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if app.eng.Paused() {
+		t.Fatal("p did not resume the queue")
+	}
+	if paused, _, _ := database.Paused(); paused {
+		t.Fatal("resume was not persisted")
 	}
 }
 
@@ -717,8 +833,8 @@ func TestStopKeyOnDownloadedFileNotices(t *testing.T) {
 	if !strings.Contains(m.notice, "already downloaded") {
 		t.Fatalf("notice = %q, want already-downloaded notice", m.notice)
 	}
-	if f, _ := database.File(fileID); !f.Wanted {
-		t.Fatalf("file = %v, want left wanted", f)
+	if f, _ := database.File(fileID); !f.Queued {
+		t.Fatalf("file = %v, want left queued", f)
 	}
 }
 
@@ -783,7 +899,7 @@ func TestEscDismissesQuotaBanner(t *testing.T) {
 	defer cancel()
 	go app.eng.Run(ctx)
 	app.eng.Kick()
-	t.Cleanup(func() { app.eng.Stop(id) })
+	t.Cleanup(func() { app.eng.Dequeue(id) })
 
 	m := &app.downloads
 	deadline := time.Now().Add(2 * time.Second)
@@ -813,31 +929,44 @@ func TestToggleLabelFollowsSelection(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	m := &app.downloads
 
-	if got := m.toggleLabel(); got != "stop" {
-		t.Fatalf("label for queued download = %q, want %q", got, "stop")
+	if got := m.toggleLabel(); got != "unqueue" {
+		t.Fatalf("label for queued download = %q, want %q", got, "unqueue")
 	}
-	if err := database.SetStatus(id, db.StatusStopped, ""); err != nil {
+	if err := database.SetDownloadQueued(id, false); err != nil {
 		t.Fatal(err)
 	}
 	m.reload()
-	if got := m.toggleLabel(); got != "start" {
-		t.Fatalf("label for stopped download = %q, want %q", got, "start")
+	if got := m.toggleLabel(); got != "queue" {
+		t.Fatalf("label for unqueued download = %q, want %q", got, "queue")
 	}
 
-	if err := database.SetStatus(id, db.StatusQueued, ""); err != nil {
+	if err := database.SetDownloadQueued(id, true); err != nil {
 		t.Fatal(err)
 	}
 	m.reload()
 	m.pane = paneFiles
-	if got := m.toggleLabel(); got != "stop" {
-		t.Fatalf("label for wanted file = %q, want %q", got, "stop")
+	if got := m.toggleLabel(); got != "unqueue" {
+		t.Fatalf("label for queued file = %q, want %q", got, "unqueue")
 	}
-	if err := database.SetFileWanted(m.files[0].ID, false); err != nil {
+	if err := database.SetFileQueued(m.files[0].ID, false); err != nil {
 		t.Fatal(err)
 	}
 	m.reload()
-	if got := m.toggleLabel(); got != "start" {
-		t.Fatalf("label for unwanted file = %q, want %q", got, "start")
+	if got := m.toggleLabel(); got != "queue" {
+		t.Fatalf("label for unqueued file = %q, want %q", got, "queue")
+	}
+}
+
+func TestPauseLabelFollowsTheQueue(t *testing.T) {
+	app, _, _ := toggleTestApp(t)
+	m := &app.downloads
+
+	if got := m.pauseLabel(); got != "pause" {
+		t.Fatalf("label for a running queue = %q, want %q", got, "pause")
+	}
+	app.eng.SetPaused(true)
+	if got := m.pauseLabel(); got != "resume" {
+		t.Fatalf("label for a paused queue = %q, want %q", got, "resume")
 	}
 }
 
@@ -847,8 +976,8 @@ func TestDownloadsRememberLastSelectedFilePerFolder(t *testing.T) {
 		URL: "first", Handle: "first", LinkType: "folder", Name: "First",
 		DestPath: "/dl/First",
 	}, []db.File{
-		{NodeHandle: "a", RemotePath: "/First/a", LocalPath: "/dl/First/a", Wanted: true},
-		{NodeHandle: "b", RemotePath: "/First/b", LocalPath: "/dl/First/b", Wanted: true},
+		{NodeHandle: "a", RemotePath: "/First/a", LocalPath: "/dl/First/a", Queued: true},
+		{NodeHandle: "b", RemotePath: "/First/b", LocalPath: "/dl/First/b", Queued: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -857,8 +986,8 @@ func TestDownloadsRememberLastSelectedFilePerFolder(t *testing.T) {
 		URL: "second", Handle: "second", LinkType: "folder", Name: "Second",
 		DestPath: "/dl/Second",
 	}, []db.File{
-		{NodeHandle: "c", RemotePath: "/Second/c", LocalPath: "/dl/Second/c", Wanted: true},
-		{NodeHandle: "d", RemotePath: "/Second/d", LocalPath: "/dl/Second/d", Wanted: true},
+		{NodeHandle: "c", RemotePath: "/Second/c", LocalPath: "/dl/Second/c", Queued: true},
+		{NodeHandle: "d", RemotePath: "/Second/d", LocalPath: "/dl/Second/d", Queued: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -913,8 +1042,8 @@ func TestSelectionIsRestoredInANewSession(t *testing.T) {
 			URL: name, Handle: name, LinkType: "folder", Name: name,
 			DestPath: "/dl/" + name,
 		}, []db.File{
-			{NodeHandle: name + "a", RemotePath: "/" + name + "/a", LocalPath: "/dl/" + name + "/a", Wanted: true},
-			{NodeHandle: name + "b", RemotePath: "/" + name + "/b", LocalPath: "/dl/" + name + "/b", Wanted: true},
+			{NodeHandle: name + "a", RemotePath: "/" + name + "/a", LocalPath: "/dl/" + name + "/a", Queued: true},
+			{NodeHandle: name + "b", RemotePath: "/" + name + "/b", LocalPath: "/dl/" + name + "/b", Queued: true},
 		}); err != nil {
 			t.Fatal(err)
 		}

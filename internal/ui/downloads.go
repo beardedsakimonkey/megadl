@@ -42,10 +42,13 @@ type downloadsModel struct {
 	// by file ID) so stopped files keep their progress bar. loadFiles
 	// refreshes it so View never touches the filesystem.
 	partials map[int64]int64
-	// partialDownloads holds the download IDs whose folder is only partly on
-	// disk, so a finished row can say "the files you picked are done" rather
-	// than "the whole folder is here". Refreshed by reload.
-	partialDownloads map[int64]bool
+	// fileCounts says how much of each download's folder is on disk, so a row
+	// can tell "all of it is here" from "part of it is". Refreshed by reload.
+	fileCounts map[int64]db.FileCount
+	// queuePos maps a download to its place in the queue. Position 0 is the
+	// head: the download being fetched, or the one a pause is holding at.
+	// Refreshed by reload.
+	queuePos map[int64]int
 	// savedDownload is the row last written to the database, so repeated
 	// events on the same row don't rewrite it.
 	savedDownload int64
@@ -109,8 +112,14 @@ func (m *downloadsModel) reload() {
 	if err == nil {
 		m.rows = rows
 	}
-	if partial, err := m.app.db.PartialDownloads(); err == nil {
-		m.partialDownloads = partial
+	if counts, err := m.app.db.FileCounts(); err == nil {
+		m.fileCounts = counts
+	}
+	if queue, err := m.app.db.Queue(); err == nil {
+		m.queuePos = make(map[int64]int, len(queue))
+		for i, id := range queue {
+			m.queuePos[id] = i
+		}
 	}
 	if m.cursor >= len(m.rows) {
 		m.cursor = max(0, len(m.rows)-1)
@@ -351,35 +360,46 @@ func (m *downloadsModel) dismissDetail() {
 	}
 }
 
-// running reports whether dl is working through its queue right now, and so
-// whether stopping is the meaningful half of the toggle for it and its files.
-// A download stalled on quota is still active, so it counts as running.
-func (m *downloadsModel) running(dl *db.Download) bool {
-	return dl.ID == m.app.eng.ActiveID() ||
-		dl.Status == db.StatusQueued || dl.Status == db.StatusRunning
+// queued reports whether dl is in the download queue, and so whether removing
+// it is the meaningful half of the s toggle for it and its files.
+func (m *downloadsModel) queued(dl *db.Download) bool {
+	_, ok := m.queuePos[dl.ID]
+	return ok
 }
 
-// toggleDownload stops the selected download if it is running, and starts it
-// otherwise.
+// atHead reports whether dl is the front of the queue: the download being
+// fetched, or the one a paused queue is holding at.
+func (m *downloadsModel) atHead(dl *db.Download) bool {
+	pos, ok := m.queuePos[dl.ID]
+	return ok && pos == 0
+}
+
+// complete reports whether every file of dl is on disk, the ones the user
+// never queued included.
+func (m *downloadsModel) complete(dl *db.Download) bool {
+	return m.fileCounts[dl.ID].Complete()
+}
+
+// toggleDownload takes the selected download out of the queue if it is in it,
+// and puts it in otherwise.
 func (m *downloadsModel) toggleDownload() {
 	if m.cursor >= len(m.rows) {
 		return
 	}
 	dl := m.rows[m.cursor]
 	switch {
-	case m.running(dl):
-		m.app.eng.Stop(dl.ID)
-	case dl.Status == db.StatusDone:
+	case m.queued(dl):
+		m.app.eng.Dequeue(dl.ID)
+	case m.complete(dl):
 		m.notice = "download already complete"
 	default:
-		m.app.eng.Resume(dl.ID)
+		m.app.eng.Enqueue(dl.ID)
+		m.notePaused()
 	}
 }
 
-// toggleFile stops the selected file if it is on track to be fetched, and
-// starts it otherwise. A file only counts as started when its download is
-// running too, so pressing s inside a stopped download starts that download
-// as well rather than dropping the file from its wanted set.
+// toggleFile takes the selected file out of the queue if it is in it, and puts
+// it in otherwise — which puts its download back in the queue too.
 func (m *downloadsModel) toggleFile() {
 	if m.fileCursor >= len(m.files) || m.cursor >= len(m.rows) {
 		return
@@ -388,12 +408,22 @@ func (m *downloadsModel) toggleFile() {
 	switch {
 	case f.Status == db.FileDone || f.Status == db.FileSkipped:
 		m.notice = "file already downloaded"
-	case f.Wanted && m.running(m.rows[m.cursor]):
-		m.app.eng.StopFile(f.ID)
+	case f.Queued:
+		m.app.eng.DequeueFile(f.ID)
 		m.reload()
 	default:
-		m.app.eng.ResumeFile(f.ID)
+		m.app.eng.QueueFile(f.ID)
+		m.notePaused()
 		m.reload()
+	}
+}
+
+// notePaused explains why a download just added to the queue isn't moving.
+// Queueing deliberately doesn't release the pause: holding the queue is the
+// user's decision, not a side effect of picking files.
+func (m *downloadsModel) notePaused() {
+	if m.app.eng.Paused() {
+		m.notice = "queued — the download queue is paused, press p to resume"
 	}
 }
 
@@ -668,6 +698,7 @@ func (m *downloadsModel) help() string {
 			shortcut{keys: []string{"j/k"}, label: "move"},
 			shortcut{keys: []string{"⏎"}, label: "play"},
 			shortcut{keys: []string{"s"}, label: m.toggleLabel() + " file"},
+			shortcut{keys: []string{"p"}, label: m.pauseLabel()},
 			shortcut{keys: []string{"r"}, label: "rename"},
 			shortcut{keys: []string{"R"}, label: "refresh listing"},
 			shortcut{keys: []string{"h"}, label: "back"},
@@ -678,6 +709,7 @@ func (m *downloadsModel) help() string {
 		shortcut{keys: []string{"a"}, label: "add"},
 		shortcut{keys: []string{"⏎"}, label: "files"},
 		shortcut{keys: []string{"s"}, label: m.toggleLabel()},
+		shortcut{keys: []string{"p"}, label: m.pauseLabel()},
 		shortcut{keys: []string{"r"}, label: "rename"},
 		shortcut{keys: []string{"R"}, label: "refresh"},
 		shortcut{keys: []string{"x"}, label: "remove"},
@@ -686,20 +718,29 @@ func (m *downloadsModel) help() string {
 	)
 }
 
+// pauseLabel names the half of the p toggle that would happen next. It reads
+// the queue, not the cursor, since pausing holds the whole queue.
+func (m *downloadsModel) pauseLabel() string {
+	if m.app != nil && m.app.eng != nil && m.app.eng.Paused() {
+		return "resume"
+	}
+	return "pause"
+}
+
 // toggleLabel names the half of the s toggle that applies to what the cursor
 // is on, so the footer says what pressing it will do.
 func (m *downloadsModel) toggleLabel() string {
 	if m.cursor >= len(m.rows) {
-		return "stop"
+		return "queue"
 	}
-	running := m.running(m.rows[m.cursor])
+	queued := m.queued(m.rows[m.cursor])
 	if m.pane == paneFiles && m.fileCursor < len(m.files) {
-		running = running && m.files[m.fileCursor].Wanted
+		queued = m.files[m.fileCursor].Queued
 	}
-	if running {
-		return "stop"
+	if queued {
+		return "unqueue"
 	}
-	return "start"
+	return "queue"
 }
 
 func (m *downloadsModel) view(width, height int) string {
@@ -767,12 +808,11 @@ func (m *downloadsModel) rowView(dl *db.Download, snap engine.Snapshot, selected
 		extra = "  " + humanRate(snap.Rate)
 	}
 	spin := m.app.spinFrame()
-	partial := m.partialDownloads[dl.ID]
 	nameW := max(8, width-2-1-1-lipgloss.Width(extra)-2)
 	name := truncate(dl.Name, nameW)
 
 	line := fmt.Sprintf("%s%s %s", cursorBar(selected, m.pane == paneList),
-		statusIcon(dl.Status, active, partial, spin), name)
+		dlMarker(m.dlMarkerStateOf(dl, snap), spin), name)
 	if extra != "" {
 		line += styleOK.Render(extra)
 	}
@@ -837,6 +877,7 @@ func (m *downloadsModel) filesView(width, height int) string {
 		}
 	}
 	title := filesTitle(dl, done, len(m.files), haveBytes, totalBytes, max(0, width-2))
+	pausedFile := m.pausedFile(dl, snap)
 
 	rowH := height - 1 // title line
 	if rowH < 1 {
@@ -876,7 +917,8 @@ func (m *downloadsModel) filesView(width, height int) string {
 			lines = append(lines, indent+styleDim.Render(truncate(r.dir+"/", max(1, width-4-2*r.depth))))
 			continue
 		}
-		lines = append(lines, m.fileRowView(m.files[r.file], dl, snap, r.file == m.fileCursor, r.depth, width, sizeW))
+		lines = append(lines, m.fileRowView(m.files[r.file], dl, snap, pausedFile,
+			r.file == m.fileCursor, r.depth, width, sizeW))
 	}
 
 	gutter := styleDim.Render("│ ")
@@ -888,7 +930,7 @@ func (m *downloadsModel) filesView(width, height int) string {
 
 // filesTitle keeps the selected folder name and file count on the left, and
 // aligns on the right how much of the whole folder is present locally —
-// measured against every file in it, wanted or not.
+// measured against every file in it, queued or not.
 func filesTitle(dl *db.Download, done, total int, haveBytes, totalBytes int64, width int) string {
 	if width <= 0 {
 		return ""
@@ -934,7 +976,31 @@ func isFetching(f db.File, dl *db.Download, snap engine.Snapshot) bool {
 	return filepath.Base(f.LocalPath) == snap.CurrentFile
 }
 
-func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Snapshot, selected bool, depth, width, sizeW int) string {
+// pausedFile is the file a held queue is stopped at, or 0 when the queue is
+// running or holding somewhere else. The engine queues files rather than
+// pausing one, so the answer is put together here: the file the status bar was
+// last showing for this download, or else the first one the engine would pick
+// up. Only the head of the queue can be holding a file.
+func (m *downloadsModel) pausedFile(dl *db.Download, snap engine.Snapshot) int64 {
+	if !snap.Paused || !m.atHead(dl) {
+		return 0
+	}
+	if m.app != nil && m.app.lastBar.ActiveID == dl.ID && m.app.lastBar.CurrentPath != "" {
+		for _, f := range m.files {
+			if f.LocalPath == m.app.lastBar.CurrentPath && f.Status == db.FilePending {
+				return f.ID
+			}
+		}
+	}
+	for _, f := range m.files {
+		if f.Queued && f.Status == db.FilePending {
+			return f.ID
+		}
+	}
+	return 0
+}
+
+func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Snapshot, pausedFile int64, selected bool, depth, width, sizeW int) string {
 	fetching := isFetching(f, dl, snap)
 
 	indent := strings.Repeat("  ", depth)
@@ -974,8 +1040,9 @@ func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Sna
 	if barW > 0 {
 		bar = "  " + fileProgressBar(barW, frac) + " " + styleDim.Render(percent)
 	}
+	st := fileMarkerStateOf(f, fetching, pausedFile != 0 && f.ID == pausedFile, frac)
 	line := cursorBar(selected, m.pane == paneFiles) + indent +
-		fileMarker(f, fetching, frac, m.app.spinFrame()) + " " + name + bar + "  " +
+		fileMarker(st, m.app.spinFrame()) + " " + name + bar + "  " +
 		styleDim.Render(size) + padding
 	if selected {
 		// width less the pane gutter filesView prepends
@@ -1010,40 +1077,65 @@ func fileName(name string, width int) string {
 	return name + strings.Repeat(" ", max(0, width-lipgloss.Width(name)))
 }
 
-// fileMarkerText is the file's one-cell marker. The file being fetched right
-// now animates with the shared spinner frame, matching the list column's
-// active row.
-func fileMarkerText(f db.File, fetching bool, frac float64, spin string) string {
-	switch {
-	case fetching:
-		return spin
-	case f.Status == db.FileDone:
-		return "✓"
-	case f.Status == db.FileSkipped:
-		return "✓"
-	case frac > 0 && f.Status != db.FileError:
-		return "◔"
-	case !f.Wanted:
-		return "○"
-	case f.Status == db.FileError:
-		return "✗"
-	}
-	return "·"
+// fileMarkerState is what a file's marker depends on. paused marks the one
+// file a held queue is stopped at; landed means every byte is on disk, whether
+// this run fetched it or it was already there.
+type fileMarkerState struct {
+	fetching bool
+	paused   bool
+	queued   bool
+	landed   bool
+	failed   bool
+	frac     float64
 }
 
-func fileMarker(f db.File, fetching bool, frac float64, spin string) string {
-	text := fileMarkerText(f, fetching, frac, spin)
+func fileMarkerStateOf(f db.File, fetching, paused bool, frac float64) fileMarkerState {
+	return fileMarkerState{
+		fetching: fetching,
+		paused:   paused,
+		queued:   f.Queued,
+		landed:   f.Status == db.FileDone || f.Status == db.FileSkipped,
+		failed:   f.Status == db.FileError,
+		frac:     frac,
+	}
+}
+
+// fileMarkerText is the file's one-cell marker, drawn from the same set as the
+// list column so the two panes read alike. The file being fetched right now
+// animates with the shared spinner frame.
+func fileMarkerText(st fileMarkerState, spin string) string {
 	switch {
-	case fetching:
+	case st.fetching:
+		return spin
+	case st.landed:
+		return "✓"
+	case st.failed:
+		return "✗"
+	case st.paused:
+		return pausedGlyph
+	case st.queued:
+		return queuedGlyph
+	case st.frac > 0:
+		return partialGlyph
+	}
+	return emptyGlyph
+}
+
+func fileMarker(st fileMarkerState, spin string) string {
+	text := fileMarkerText(st, spin)
+	switch {
+	case st.fetching:
 		return styleSpinner.Render(text)
-	case f.Status == db.FileDone || f.Status == db.FileSkipped:
+	case st.landed:
 		return styleOK.Render(text)
-	case frac > 0 && f.Status != db.FileError:
-		return stylePartial.Render(text)
-	case !f.Wanted:
-		return styleDim.Render(text)
-	case f.Status == db.FileError:
+	case st.failed:
 		return styleError.Render(text)
+	case st.paused:
+		return styleWarn.Render(text)
+	case st.queued:
+		return styleDim.Render(text)
+	case st.frac > 0:
+		return stylePartial.Render(text)
 	}
 	return styleDim.Render(text)
 }
@@ -1056,6 +1148,15 @@ func (m *downloadsModel) detailView(width int) string {
 
 	if snap.QuotaStalled && m.quotaDismissed != snap.ActiveID {
 		lines = append(lines, " "+styleError.Render("QUOTA — mega is throttling, retrying"))
+	}
+
+	if snap.Paused {
+		reason := "press p to resume"
+		if snap.PauseReason != "" {
+			// a pause the engine imposed, so say what stopped the queue
+			reason = snap.PauseReason + " — press p to resume"
+		}
+		lines = append(lines, " "+styleWarn.Render("PAUSED — "+reason))
 	}
 
 	if m.cursor < len(m.rows) {
@@ -1075,56 +1176,80 @@ func (m *downloadsModel) detailView(width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// statusIconText is the download's one-cell marker in the list column,
-// mirroring the file pane's markers. The engine's current download animates
-// with the shared spinner frame; a 'running' row without it is a leftover
-// from a previous session. A finished download whose folder is only partly on
-// disk gets the partial glyph, since a check would read as "the whole folder
-// is here" rather than "the files you picked are here". Every glyph must stay
-// one cell wide so the name column lines up.
-func statusIconText(status string, active, partial bool, spin string) string {
-	if active {
-		return spin
-	}
-	switch status {
-	case db.StatusQueued:
-		return "○"
-	case db.StatusRunning:
-		return "◔"
-	case db.StatusStopped:
-		return "⏸︎"
-	case db.StatusDone:
-		if partial {
-			return "◔"
-		}
-		return "✓"
-	case db.StatusError:
-		return "✗"
-	case db.StatusQuota:
-		return "⚠"
-	}
-	return "·"
+// Markers for both panes. Every glyph must stay one cell wide so the name
+// columns line up. They describe what is on disk and what the queue is going
+// to do about it — not a status field, so there is nothing to leave stale.
+const (
+	pausedGlyph  = "⏸︎" // the queue is held here
+	queuedGlyph  = "↓"  // waiting its turn
+	partialGlyph = "◔"  // some of it is on disk
+	emptyGlyph   = "·"  // none of it is
+)
+
+// dlMarkerState is what a download's list marker depends on. head is the front
+// of the queue, which is where a pause holds; complete means the whole folder
+// is on disk, including files the user never queued, since a check mark that
+// only covered the queued ones would read as "all of it is here".
+type dlMarkerState struct {
+	active   bool
+	paused   bool
+	head     bool
+	queued   bool
+	complete bool
+	anyBytes bool
+	failed   bool
 }
 
-func statusIcon(status string, active, partial bool, spin string) string {
-	text := statusIconText(status, active, partial, spin)
-	if active {
-		return styleSpinner.Render(text)
+func (m *downloadsModel) dlMarkerStateOf(dl *db.Download, snap engine.Snapshot) dlMarkerState {
+	counts := m.fileCounts[dl.ID]
+	return dlMarkerState{
+		active:   dl.ID == snap.ActiveID,
+		paused:   snap.Paused,
+		head:     m.atHead(dl),
+		queued:   m.queued(dl),
+		complete: counts.Complete(),
+		anyBytes: counts.Landed > 0 || dl.DoneBytes > 0,
+		failed:   dl.Status == db.StatusError,
 	}
-	switch status {
-	case db.StatusQueued:
-		return styleDim.Render(text)
-	case db.StatusRunning:
-		return styleAccent.Render(text)
-	case db.StatusStopped:
+}
+
+// dlMarkerText is the download's one-cell marker in the list column. A queued
+// download says so rather than showing how far along it is: the progress it has
+// made matters less than whether it is waiting, and the file pane has the
+// detail either way.
+func dlMarkerText(st dlMarkerState, spin string) string {
+	switch {
+	case st.active:
+		return spin
+	case st.queued && st.head && st.paused:
+		return pausedGlyph
+	case st.queued:
+		return queuedGlyph
+	case st.complete:
+		return "✓"
+	case st.anyBytes:
+		return partialGlyph
+	case st.failed:
+		return "✗"
+	}
+	return emptyGlyph
+}
+
+func dlMarker(st dlMarkerState, spin string) string {
+	text := dlMarkerText(st, spin)
+	switch {
+	case st.active:
+		return styleSpinner.Render(text)
+	case st.queued && st.head && st.paused:
 		return styleWarn.Render(text)
-	case db.StatusDone:
-		if partial {
-			return stylePartial.Render(text)
-		}
+	case st.queued:
+		return styleDim.Render(text)
+	case st.complete:
 		return styleOK.Render(text)
-	case db.StatusError, db.StatusQuota:
+	case st.anyBytes:
+		return stylePartial.Render(text)
+	case st.failed:
 		return styleError.Render(text)
 	}
-	return text
+	return styleDim.Render(text)
 }

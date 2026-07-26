@@ -83,9 +83,9 @@ func mouseApp(t *testing.T) *App {
 			URL: name, Handle: name, LinkType: "folder", Name: name, DestPath: dest,
 		}, []db.File{
 			{NodeHandle: name + "a", RemotePath: "/" + name + "/a",
-				LocalPath: filepath.Join(dest, "a.mkv"), Size: 10, Wanted: true},
+				LocalPath: filepath.Join(dest, "a.mkv"), Size: 10, Queued: true},
 			{NodeHandle: name + "b", RemotePath: "/" + name + "/b",
-				LocalPath: filepath.Join(dest, "b.mkv"), Size: 10, Wanted: true},
+				LocalPath: filepath.Join(dest, "b.mkv"), Size: 10, Queued: true},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -197,11 +197,11 @@ func filePaneModel(t *testing.T, dir string) (*downloadsModel, *[]string) {
 		rows: []*db.Download{{ID: 7, Name: "Show", DestPath: dir}},
 		files: []db.File{
 			{ID: 1, LocalPath: filepath.Join(dir, "Season 01", "e1.mkv"),
-				Size: 10, Status: db.FileDone, Wanted: true},
+				Size: 10, Status: db.FileDone, Queued: true},
 			{ID: 2, LocalPath: filepath.Join(dir, "Season 01", "e2.mkv"),
-				Size: 10, Status: db.FileDone, Wanted: true},
+				Size: 10, Status: db.FileDone, Queued: true},
 			{ID: 3, LocalPath: filepath.Join(dir, "readme.txt"),
-				Size: 10, Status: db.FileDone, Wanted: true},
+				Size: 10, Status: db.FileDone, Queued: true},
 		},
 		filesFor: 7,
 		openFile: func(paths []string) error {

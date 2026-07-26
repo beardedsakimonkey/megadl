@@ -35,9 +35,9 @@ func TestEngineIntegration(t *testing.T) {
 		TotalBytes: total,
 	}, []db.File{
 		{NodeHandle: "FILEHND1", RemotePath: "/My Show/Season 1/e01.mkv",
-			LocalPath: filepath.Join(dest, "Season 1", "e01.mkv"), Size: int64(len(episode)), Wanted: true},
+			LocalPath: filepath.Join(dest, "Season 1", "e01.mkv"), Size: int64(len(episode)), Queued: true},
 		{NodeHandle: "FILEHND2", RemotePath: "/My Show/readme.txt",
-			LocalPath: filepath.Join(dest, "readme.txt"), Size: int64(len(readme)), Wanted: true},
+			LocalPath: filepath.Join(dest, "readme.txt"), Size: int64(len(readme)), Queued: true},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +26,11 @@ type Snapshot struct {
 	Rate         float64
 	QuotaStalled bool
 	StderrTail   []string
+
+	// Paused holds for the queue as a whole, so it is reported whether or not
+	// a download is active. PauseReason is empty when the user did it.
+	Paused      bool
+	PauseReason string
 }
 
 type active struct {
@@ -43,6 +47,7 @@ type active struct {
 	completed    int64 // bytes of finished/skipped files
 	quotaStalled bool
 	stopping     bool
+	paused       bool // held by the user or by quota; stays in the queue
 	requeue      bool // restart with a changed file selection after exit
 	lastError    string
 	fileFailed   bool
@@ -60,19 +65,27 @@ type Engine struct {
 	// Notify coalesces "state changed" signals for the UI.
 	Notify chan struct{}
 
-	mu      sync.Mutex
-	act     *active
-	pending int64 // unflushed downloaded-bytes delta
-	kick    chan struct{}
+	mu          sync.Mutex
+	act         *active
+	pending     int64 // unflushed downloaded-bytes delta
+	kick        chan struct{}
+	paused      bool // mirrors queue_state, which is the durable copy
+	pauseReason string
 }
 
 func New(drv mega.Driver, database *db.DB) *Engine {
-	return &Engine{
+	e := &Engine{
 		drv:    drv,
 		db:     database,
 		Notify: make(chan struct{}, 1),
 		kick:   make(chan struct{}, 1),
 	}
+	// A pause outlives the process that made it, so the queue comes back up
+	// held rather than pulling on a link the user (or MEGA) stopped.
+	if database != nil {
+		e.paused, e.pauseReason, _ = database.Paused()
+	}
+	return e
 }
 
 func (e *Engine) notify() {
@@ -116,9 +129,9 @@ func (e *Engine) Run(ctx context.Context) {
 
 func (e *Engine) maybeStart(ctx context.Context) {
 	e.mu.Lock()
-	busy := e.act != nil
+	blocked := e.act != nil || e.paused
 	e.mu.Unlock()
-	if busy {
+	if blocked {
 		return
 	}
 
@@ -134,31 +147,22 @@ func (e *Engine) maybeStart(ctx context.Context) {
 		return
 	}
 
+	// Exactly the files that put this download at the head of the queue. An
+	// empty set would tell the driver to fetch the whole folder, so bail out
+	// rather than download more than was asked for.
 	var handles []string
 	for _, f := range files {
-		if f.Wanted {
+		if f.Queued && f.Status == db.FilePending {
 			handles = append(handles, f.NodeHandle)
 		}
 	}
-	if len(files) > 0 && len(handles) == 0 {
-		// every file was individually stopped; nothing to fetch
-		e.db.SetStatus(dl.ID, db.StatusStopped, "")
-		e.notify()
-		e.Kick() // give the next queued download a turn
+	if len(handles) == 0 {
 		return
 	}
 
 	args := mega.DownloadArgs{URL: dl.URL, Path: dl.DestPath}
 	if dl.LinkType == "folder" {
-		if len(handles) > 0 {
-			// the enqueue-time selection goes stale once a listing
-			// refresh merges remotely added files, so always select
-			// the current wanted set
-			args.SelectHandles = handles
-		} else if dl.Selection != "" {
-			// no file rows recorded; fall back to the stored selection
-			args.SelectHandles = strings.Split(dl.Selection, ",")
-		}
+		args.SelectHandles = handles
 	}
 
 	a := &active{
@@ -174,7 +178,6 @@ func (e *Engine) maybeStart(ctx context.Context) {
 		}
 	}
 
-	e.db.ResetPendingFiles(dl.ID)
 	proc, err := e.drv.Start(ctx, args)
 	if err != nil {
 		e.db.SetStatus(dl.ID, db.StatusError, err.Error())
@@ -250,10 +253,9 @@ func (e *Engine) consume(a *active) {
 			a.lastError = ev.Message
 
 		case mega.QuotaEvent:
-			if !a.quotaStalled {
-				a.quotaStalled = true
-				e.db.SetStatus(a.id, db.StatusQuota, "")
-			}
+			// The driver keeps retrying inside its own window; the banner
+			// says so. Only an exit turns this into a paused queue.
+			a.quotaStalled = true
 
 		case mega.StderrEvent:
 			a.stderrTail = append(a.stderrTail, ev.Line)
@@ -283,20 +285,23 @@ func (e *Engine) creditFile(a *active, path string) {
 	a.fileSize, a.sessionTotal, a.sessionDone = 0, 0, 0
 }
 
-// finishLocked decides the download's final status. Called with e.mu held.
+// finishLocked records whatever outcome the run reached. Called with e.mu
+// held. Nothing here decides what runs next: queue membership does that, so a
+// download the user removed stays out and one the app was killed mid-way
+// through comes back on the next launch.
 func (e *Engine) finishLocked(a *active, exitErr error) {
 	e.flushLocked() // credit remaining bytes while e.act still points here
 
 	switch {
-	case a.stopping:
-		e.db.SetStatus(a.id, db.StatusStopped, "")
-	case a.requeue:
-		// per-file stop/resume changed the selection; run again with it
-		e.db.SetStatus(a.id, db.StatusQueued, "")
+	case a.stopping, a.paused, a.requeue:
+		// no outcome to record: the queue already says what happens next
 	case a.gotEnd && a.endStatus == 0 && !a.fileFailed:
 		e.db.MarkCompleted(a.id, db.StatusDone)
+		e.db.DequeuePendingFiles(a.id)
 	case a.quotaStalled:
-		e.db.SetStatus(a.id, db.StatusQuota, "daily transfer quota exceeded")
+		// hold the queue here rather than hammering a closed door; the
+		// download keeps its place at the head
+		e.setPausedLocked(true, "daily transfer quota exceeded")
 	default:
 		msg := a.lastError
 		if msg == "" && len(a.stderrTail) > 0 {
@@ -309,6 +314,9 @@ func (e *Engine) finishLocked(a *active, exitErr error) {
 			msg = fmt.Sprintf("download ended with status %d", a.endStatus)
 		}
 		e.db.SetStatus(a.id, db.StatusError, msg)
+		// Whatever this run didn't reach leaves the queue with it, so a link
+		// that fails every time isn't started again the moment it exits.
+		e.db.DequeuePendingFiles(a.id)
 	}
 
 	e.act = nil
@@ -334,49 +342,44 @@ func (e *Engine) flushLocked() {
 	}
 }
 
-// Stop cancels the active download or un-queues a waiting one.
-func (e *Engine) Stop(id int64) {
+// Dequeue takes a download out of the queue, cancelling it first if it is the
+// one running. Its partial files stay on disk and stay resumable.
+func (e *Engine) Dequeue(id int64) {
+	// Out of the queue before the process exits, so the Kick that follows
+	// doesn't pick this download straight back up.
+	e.db.SetDownloadQueued(id, false)
+
 	e.mu.Lock()
 	if e.act != nil && e.act.id == id {
 		e.act.stopping = true
 		e.act.proc.Stop()
-		e.mu.Unlock()
-		return
 	}
 	e.mu.Unlock()
-
-	if dl, err := e.db.Download(id); err == nil && dl.Status == db.StatusQueued {
-		e.db.SetStatus(id, db.StatusStopped, "")
-		e.notify()
-	}
+	e.notify()
 }
 
-// Resume re-queues a stopped/errored/quota download.
-func (e *Engine) Resume(id int64) {
-	dl, err := e.db.Download(id)
-	if err != nil || dl == nil {
+// Enqueue puts a download at the back of the queue, taking everything in it
+// that is not already on disk.
+func (e *Engine) Enqueue(id int64) {
+	if err := e.db.SetDownloadQueued(id, true); err != nil {
 		return
 	}
-	switch dl.Status {
-	case db.StatusStopped, db.StatusError, db.StatusQuota:
-		e.db.SetStatus(id, db.StatusQueued, "")
-		e.Kick()
-		e.notify()
-	}
+	e.Kick()
+	e.notify()
 }
 
-// StopFile drops one file from its download's wanted set. If the file
-// is part of the running process's selection, that process is restarted
-// without it. Partial files remain resumable.
-func (e *Engine) StopFile(fileID int64) {
+// DequeueFile drops one file from the queue. If the running process is
+// fetching from its download, that process restarts without it. The partial
+// stays resumable.
+func (e *Engine) DequeueFile(fileID int64) {
 	f, err := e.db.File(fileID)
-	if err != nil || !f.Wanted {
+	if err != nil || !f.Queued {
 		return
 	}
 	if f.Status == db.FileDone || f.Status == db.FileSkipped {
-		return // already on disk; nothing to stop
+		return // already on disk; nothing to drop
 	}
-	e.db.SetFileWanted(fileID, false)
+	e.db.SetFileQueued(fileID, false)
 	e.db.RecalcTotalBytes(f.DownloadID)
 
 	e.mu.Lock()
@@ -388,10 +391,9 @@ func (e *Engine) StopFile(fileID int64) {
 	e.notify()
 }
 
-// ResumeFile re-adds one file to the wanted set and makes sure it gets
-// fetched: a finished/stopped/failed download is re-queued, an active
-// process is restarted when its selection has to change.
-func (e *Engine) ResumeFile(fileID int64) {
+// QueueFile adds one file to the queue, which puts its download back in too.
+// An active process is restarted when its selection has to change.
+func (e *Engine) QueueFile(fileID int64) {
 	f, err := e.db.File(fileID)
 	if err != nil {
 		return
@@ -399,30 +401,57 @@ func (e *Engine) ResumeFile(fileID int64) {
 	if f.Status == db.FileDone || f.Status == db.FileSkipped {
 		return // nothing to fetch
 	}
-	changed := !f.Wanted
+	changed := !f.Queued || f.Status == db.FileError
 	if changed {
-		e.db.SetFileWanted(fileID, true)
+		e.db.SetFileQueued(fileID, true)
 		e.db.RecalcTotalBytes(f.DownloadID)
 	}
 
 	e.mu.Lock()
 	act := e.act != nil && e.act.id == f.DownloadID
-	if act && !e.act.stopping && (changed || f.Status == db.FileError) {
+	if act && !e.act.stopping && changed {
 		e.act.requeue = true
 		e.act.proc.Stop()
 	}
 	e.mu.Unlock()
 
 	if !act {
-		if dl, err := e.db.Download(f.DownloadID); err == nil {
-			switch dl.Status {
-			case db.StatusStopped, db.StatusError, db.StatusQuota, db.StatusDone:
-				e.db.SetStatus(dl.ID, db.StatusQueued, "")
-			}
-		}
 		e.Kick()
 	}
 	e.notify()
+}
+
+// Paused reports whether the queue is held.
+func (e *Engine) Paused() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.paused
+}
+
+// SetPaused holds or releases the queue. Pausing cancels the download in
+// flight without taking it out of the queue, so it keeps its place at the head
+// and its partial file; releasing starts it again from where it stopped.
+func (e *Engine) SetPaused(paused bool) {
+	e.mu.Lock()
+	e.setPausedLocked(paused, "")
+	e.mu.Unlock()
+	if !paused {
+		e.Kick()
+	}
+	e.notify()
+}
+
+// setPausedLocked persists the pause and cancels any active download. Called
+// with e.mu held.
+func (e *Engine) setPausedLocked(paused bool, reason string) {
+	e.paused, e.pauseReason = paused, reason
+	if e.db != nil {
+		e.db.SetPaused(paused, reason)
+	}
+	if paused && e.act != nil && !e.act.stopping {
+		e.act.paused = true
+		e.act.proc.Stop()
+	}
 }
 
 // ActiveID returns the running download's id, or 0.
@@ -439,7 +468,7 @@ func (e *Engine) Snapshot() Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.act == nil {
-		return Snapshot{}
+		return Snapshot{Paused: e.paused, PauseReason: e.pauseReason}
 	}
 	a := e.act
 	fileDone := a.fileSize - a.sessionTotal + a.sessionDone
@@ -456,6 +485,8 @@ func (e *Engine) Snapshot() Snapshot {
 		Rate:         a.rate.rate(),
 		QuotaStalled: a.quotaStalled,
 		StderrTail:   append([]string(nil), a.stderrTail...),
+		Paused:       e.paused,
+		PauseReason:  e.pauseReason,
 	}
 }
 

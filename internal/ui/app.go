@@ -191,6 +191,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			a.addlink = newAddlinkModel(a)
 			return a, a.addlink.init()
+		case "p":
+			// the queue is paused as a whole, so this ignores the cursor
+			// and acts on whatever the status bar is showing
+			a.eng.SetPaused(!a.eng.Paused())
+			a.downloads.notice = ""
+			return a, nil
 		}
 	}
 
@@ -296,8 +302,8 @@ func (a *App) statusbarView() string {
 		// land in full, so the held strip says so rather than freezing at 99%.
 		held.FileDone = held.FileSize
 	}
-	// the row's own icon, so the strip and the list agree on how it went
-	marker := statusIcon(row.Status, false, a.downloads.partialDownloads[row.ID], "")
+	// the row's own marker, so the strip and the list agree on how it went
+	marker := dlMarker(a.downloads.dlMarkerStateOf(row, snap), "")
 	return statusbarLine(held, marker, a.width)
 }
 

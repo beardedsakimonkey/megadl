@@ -30,6 +30,14 @@ MEGA protocol implementation (no external downloader).
 - Preserve download invariants: only one active queue item, transfer quota
   counts newly received bytes only, and `.megatmp.<handle>` partials remain
   resumable until MAC verification succeeds.
+- The queue is the single source of truth for what runs next: a download is in
+  it when it has a file with `queued = 1` that is still pending, ordered by
+  `queued_at`. `downloads.status` records only terminal outcomes (`done`,
+  `error`); never derive "running/waiting/paused" from it. Pausing is one flag
+  on `queue_state` covering the whole queue, and it survives restarts.
+- List markers describe what is on disk and what the queue will do about it,
+  never a status field, so they cannot go stale. Keep every glyph one cell
+  wide or the name columns shift.
 - Keep Bubble Tea `Update` paths non-blocking; perform I/O in `tea.Cmd`s.
 - Prefer ANSI terminal colors over hex color literals in UI styling.
 - SQLite schema changes must include a migration path for existing databases

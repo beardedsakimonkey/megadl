@@ -97,7 +97,7 @@ func insertDownload(t *testing.T, database *db.DB, destPath string) int64 {
 		RemotePath: "/episode.mkv",
 		LocalPath:  filepath.Join(destPath, "episode.mkv"),
 		Size:       1,
-		Wanted:     true,
+		Queued:     true,
 	}})
 	if err != nil {
 		t.Fatal(err)

@@ -555,7 +555,7 @@ func (m *addlinkModel) enqueue(rawName string) error {
 			RemotePath: root.Path,
 			LocalPath:  dest,
 			Size:       root.Size,
-			Wanted:     true,
+			Queued:     true,
 		})
 
 	case len(m.picker.rows) == 0:
@@ -567,20 +567,20 @@ func (m *addlinkModel) enqueue(rawName string) error {
 			RemotePath: root.Path,
 			LocalPath:  filepath.Join(dest, naming.Sanitize(root.Name)),
 			Size:       root.Size,
-			Wanted:     true,
+			Queued:     true,
 		})
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			return err
 		}
 
 	default:
-		// every remote file is recorded; unselected ones stay visible
-		// as unwanted and can be resumed later from the file pane
+		// every remote file is recorded; the ones left unselected stay
+		// visible outside the queue and can be added later from the file pane
 		dl.Selection = strings.Join(m.picker.minimalHandles(), ",")
 		files = listingFiles(dl.DestPath, m.nodes)
 		for i := range files {
-			files[i].Wanted = m.picker.selected[files[i].NodeHandle]
-			if files[i].Wanted {
+			files[i].Queued = m.picker.selected[files[i].NodeHandle]
+			if files[i].Queued {
 				dl.TotalBytes += files[i].Size
 			}
 		}

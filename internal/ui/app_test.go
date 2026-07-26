@@ -114,12 +114,25 @@ func TestStatusbarEmptyWhenIdle(t *testing.T) {
 	}
 }
 
+// finishedBar and unfinishedBar are the two shapes the held strip is tested
+// against: a download whose folder is entirely on disk, and one that only got
+// part of the way there.
+func finishedBar() *App {
+	return heldBarApp(db.StatusDone, db.FileCount{Total: 1, Landed: 1})
+}
+
+func unfinishedBar() *App {
+	return heldBarApp(db.StatusPending, db.FileCount{Total: 2, Landed: 1})
+}
+
 // heldBarApp is an app whose engine is idle but which drew a transfer for
-// download 3 a moment ago.
-func heldBarApp(status string) *App {
+// download 3 a moment ago. counts says how much of that download is on disk,
+// which is what the marker on its row — and so on the held strip — comes from.
+func heldBarApp(status string, counts db.FileCount) *App {
 	app := &App{width: 100, eng: engine.New(nil, nil)}
 	app.downloads = newDownloadsModel(app)
-	app.downloads.rows = []*db.Download{{ID: 3, Name: "Skins", Status: status}}
+	app.downloads.rows = []*db.Download{{ID: 3, Name: "Skins", Status: status, DoneBytes: 100}}
+	app.downloads.fileCounts = map[int64]db.FileCount{3: counts}
 	app.lastBar = engine.Snapshot{
 		ActiveID:    3,
 		CurrentFile: "episode-01.mkv",
@@ -131,7 +144,7 @@ func heldBarApp(status string) *App {
 }
 
 func TestStatusbarHoldsLastTransferOnceTheEngineGoesIdle(t *testing.T) {
-	app := heldBarApp(db.StatusDone)
+	app := finishedBar()
 
 	got := ansi.Strip(app.statusbarView())
 	for _, want := range []string{"✓ episode-01.mkv", "100%", "100 / 100 B"} {
@@ -152,7 +165,7 @@ func TestStatusbarHoldsLastTransferOnceTheEngineGoesIdle(t *testing.T) {
 // holding stops a chunk short of the file size. A finished download reads as
 // finished anyway: a full bar beside 100%, not 19 of 20 cells beside "100%".
 func TestStatusbarCompletesHeldBarForFinishedDownload(t *testing.T) {
-	app := heldBarApp(db.StatusDone)
+	app := finishedBar()
 	app.lastBar.FileDone = 9_990
 	app.lastBar.FileSize = 10_000
 
@@ -165,9 +178,9 @@ func TestStatusbarCompletesHeldBarForFinishedDownload(t *testing.T) {
 	}
 }
 
-// A stopped download's strip is left where the transfer really stopped.
+// An unfinished download's strip is left where the transfer really stopped.
 func TestStatusbarKeepsHeldBarShortForUnfinishedDownload(t *testing.T) {
-	app := heldBarApp(db.StatusStopped)
+	app := unfinishedBar()
 	app.lastBar.FileDone = 9_990
 	app.lastBar.FileSize = 10_000
 
@@ -180,18 +193,18 @@ func TestStatusbarKeepsHeldBarShortForUnfinishedDownload(t *testing.T) {
 	}
 }
 
-// A stopped download keeps its strip too, wearing the same icon its row does.
-func TestStatusbarHoldsStoppedTransfer(t *testing.T) {
-	app := heldBarApp(db.StatusStopped)
+// An unfinished download keeps its strip too, wearing the same marker its row
+// does — here the partial one, since only part of the folder is on disk.
+func TestStatusbarHoldsUnfinishedTransfer(t *testing.T) {
+	app := unfinishedBar()
 
-	want := statusIconText(db.StatusStopped, false, false, "")
-	if got := ansi.Strip(app.statusbarView()); !strings.Contains(got, want+" episode-01.mkv") {
-		t.Fatalf("held statusbar = %q, want marker %q", got, want)
+	if got := ansi.Strip(app.statusbarView()); !strings.Contains(got, partialGlyph+" episode-01.mkv") {
+		t.Fatalf("held statusbar = %q, want marker %q", got, partialGlyph)
 	}
 }
 
 func TestStatusbarDropsHeldTransferWhenItsDownloadIsRemoved(t *testing.T) {
-	app := heldBarApp(db.StatusDone)
+	app := finishedBar()
 	app.downloads.rows = nil
 
 	if got := app.statusbarView(); got != "" {

@@ -31,10 +31,8 @@ func run() error {
 	}
 	defer database.Close()
 
-	// boot recovery + housekeeping
-	if err := database.ResetRunning(); err != nil {
-		return err
-	}
+	// housekeeping. There is no boot recovery to do: what runs next comes from
+	// queue membership, which a killed process leaves exactly as it was.
 	if _, err := library.Sync(cfg.DownloadDir, database); err != nil {
 		return err
 	}

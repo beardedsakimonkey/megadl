@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS downloads (
   total_bytes      INTEGER NOT NULL DEFAULT 0,
   done_bytes       INTEGER NOT NULL DEFAULT 0,
   created_at       INTEGER NOT NULL,
+  queued_at        INTEGER NOT NULL DEFAULT 0,
   started_at       INTEGER,
   completed_at     INTEGER
 );
@@ -41,7 +42,7 @@ CREATE TABLE IF NOT EXISTS download_files (
   size         INTEGER NOT NULL,
   status       TEXT NOT NULL DEFAULT 'pending'
                CHECK (status IN ('pending','done','skipped','error')),
-  wanted       INTEGER NOT NULL DEFAULT 1
+  queued       INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_files_download ON download_files(download_id);
 
@@ -58,16 +59,26 @@ CREATE TABLE IF NOT EXISTS ui_state (
   id                   INTEGER PRIMARY KEY CHECK (id = 1),
   selected_download_id INTEGER REFERENCES downloads(id) ON DELETE SET NULL
 );
+
+-- Single row (id = 1) holding queue state. Pausing belongs to the queue as a
+-- whole rather than to any one download: it stops the engine from starting the
+-- head, and survives restarts.
+CREATE TABLE IF NOT EXISTS queue_state (
+  id     INTEGER PRIMARY KEY CHECK (id = 1),
+  paused INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT ''
+);
 `
 
-// Download statuses.
+// Download statuses. The column records only terminal outcomes; whether a
+// download is queued, running or paused is derived from download_files.queued
+// and from what the engine is doing, so the two can never disagree.
+// StatusPending is spelled 'queued' on disk because the schema's CHECK
+// constraint predates this split and SQLite cannot alter a CHECK in place.
 const (
-	StatusQueued  = "queued"
-	StatusRunning = "running"
-	StatusStopped = "stopped"
+	StatusPending = "queued" // nothing terminal has happened yet
 	StatusDone    = "done"
 	StatusError   = "error"
-	StatusQuota   = "quota"
 )
 
 // File statuses.
@@ -105,7 +116,7 @@ type File struct {
 	LocalPath  string
 	Size       int64
 	Status     string
-	Wanted     bool // false = user stopped this file; excluded from fetch
+	Queued     bool // in the download queue; false = user removed it
 }
 
 type DB struct {
@@ -123,13 +134,37 @@ func Open(path string) (*DB, error) {
 		h.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	// Columns added after the fact; fresh databases already have them from
-	// the schema above, so a duplicate-column error means "already migrated".
+	// The wanted flag became queue membership. A missing column means the
+	// rename already happened, or the schema above just created queued.
+	if _, err := h.Exec(`ALTER TABLE download_files RENAME COLUMN wanted TO queued`); err != nil &&
+		!strings.Contains(err.Error(), "no such column") {
+		h.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	// Columns added after the fact; fresh databases already have them from the
+	// schema above, so a duplicate-column error means "already migrated". The
+	// queued column is listed for databases old enough to predate wanted, so
+	// the rename above found nothing to rename.
 	for _, stmt := range []string{
-		`ALTER TABLE download_files ADD COLUMN wanted INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE downloads ADD COLUMN selected_file_id INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE downloads ADD COLUMN queued_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE download_files ADD COLUMN queued INTEGER NOT NULL DEFAULT 1`,
 	} {
 		if _, err := h.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			h.Close()
+			return nil, fmt.Errorf("migrate: %w", err)
+		}
+	}
+	// Downloads a previous version had stopped must not silently restart: drop
+	// them out of the queue, then collapse the statuses that no longer exist
+	// into StatusPending. Order matters — the first statement reads 'stopped'.
+	for _, stmt := range []string{
+		`UPDATE download_files SET queued = 0 WHERE download_id IN
+			(SELECT id FROM downloads WHERE status = 'stopped')`,
+		`UPDATE downloads SET status = 'queued' WHERE status IN ('running','stopped','quota')`,
+		`UPDATE downloads SET queued_at = created_at WHERE queued_at = 0`,
+	} {
+		if _, err := h.Exec(stmt); err != nil {
 			h.Close()
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
@@ -147,11 +182,12 @@ func (d *DB) InsertDownload(dl *Download, files []File) (int64, error) {
 	}
 	defer tx.Rollback()
 
+	now := time.Now().Unix()
 	res, err := tx.Exec(`INSERT INTO downloads
-		(url, handle, link_type, name, dest_path, selection, status, total_bytes, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
+		(url, handle, link_type, name, dest_path, selection, status, total_bytes, created_at, queued_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		dl.URL, dl.Handle, dl.LinkType, dl.Name, dl.DestPath, dl.Selection,
-		StatusQueued, dl.TotalBytes, time.Now().Unix())
+		StatusPending, dl.TotalBytes, now, now)
 	if err != nil {
 		return 0, err
 	}
@@ -161,18 +197,18 @@ func (d *DB) InsertDownload(dl *Download, files []File) (int64, error) {
 	}
 	for _, f := range files {
 		if _, err := tx.Exec(`INSERT INTO download_files
-			(download_id, node_handle, remote_path, local_path, size, wanted)
+			(download_id, node_handle, remote_path, local_path, size, queued)
 			VALUES (?,?,?,?,?,?)`,
-			id, f.NodeHandle, f.RemotePath, f.LocalPath, f.Size, f.Wanted); err != nil {
+			id, f.NodeHandle, f.RemotePath, f.LocalPath, f.Size, f.Queued); err != nil {
 			return 0, err
 		}
 	}
 	return id, tx.Commit()
 }
 
-// MergeFiles inserts listing rows not tracked yet (matched by node
-// handle) as unwanted, so remote files added after enqueueing become
-// visible. Returns how many rows were added.
+// MergeFiles inserts listing rows not tracked yet (matched by node handle)
+// outside the queue, so remote files added after enqueueing become visible
+// without downloading themselves. Returns how many rows were added.
 func (d *DB) MergeFiles(downloadID int64, files []File) (int, error) {
 	tx, err := d.sql.Begin()
 	if err != nil {
@@ -183,7 +219,7 @@ func (d *DB) MergeFiles(downloadID int64, files []File) (int, error) {
 	added := 0
 	for _, f := range files {
 		res, err := tx.Exec(`INSERT INTO download_files
-			(download_id, node_handle, remote_path, local_path, size, wanted)
+			(download_id, node_handle, remote_path, local_path, size, queued)
 			SELECT ?,?,?,?,?,0
 			WHERE NOT EXISTS (SELECT 1 FROM download_files
 				WHERE download_id = ? AND node_handle = ?)`,
@@ -262,14 +298,65 @@ func (d *DB) FindByResource(linkType, handle string) (*Download, error) {
 	return dls[0], nil
 }
 
-// NextQueued returns the oldest queued download, or nil.
+// inQueue matches downloads with fetching left to do: at least one file the
+// user has queued that has not landed yet. Files left in 'error' don't match,
+// which is what keeps a failing download from being retried forever — queueing
+// it again clears the error and puts it back in.
+const inQueue = `EXISTS (SELECT 1 FROM download_files
+	WHERE download_id = downloads.id AND queued = 1 AND status = 'pending')`
+
+// queueOrder is the order the engine works through the queue: whenever a
+// download joined it, oldest first. Re-adding one sets queued_at again, which
+// sends it to the back.
+const queueOrder = `ORDER BY queued_at ASC, id ASC`
+
+// NextQueued returns the download at the head of the queue, or nil.
 func (d *DB) NextQueued() (*Download, error) {
 	dls, err := d.collectDownloads(`SELECT ` + downloadCols + ` FROM downloads
-		WHERE status = 'queued' ORDER BY created_at ASC, id ASC LIMIT 1`)
+		WHERE ` + inQueue + ` ` + queueOrder + ` LIMIT 1`)
 	if err != nil || len(dls) == 0 {
 		return nil, err
 	}
 	return dls[0], nil
+}
+
+// Queue returns the ids of the downloads waiting to be fetched, head first.
+func (d *DB) Queue() ([]int64, error) {
+	rows, err := d.sql.Query(`SELECT id FROM downloads WHERE ` + inQueue + ` ` + queueOrder)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// Paused reports whether the queue is held, and why. A paused queue keeps its
+// head: nothing starts until the user resumes. The reason is empty when the
+// user paused it themselves, and outlives the download process that hit it —
+// which is what lets the UI still explain a quota pause afterwards.
+func (d *DB) Paused() (bool, string, error) {
+	var paused bool
+	var reason string
+	err := d.sql.QueryRow(`SELECT paused, reason FROM queue_state WHERE id = 1`).Scan(&paused, &reason)
+	if err == sql.ErrNoRows {
+		return false, "", nil
+	}
+	return paused, reason, err
+}
+
+func (d *DB) SetPaused(paused bool, reason string) error {
+	_, err := d.sql.Exec(`INSERT INTO queue_state (id, paused, reason) VALUES (1, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET paused = excluded.paused, reason = excluded.reason`,
+		paused, reason)
+	return err
 }
 
 func (d *DB) SetStatus(id int64, status, errMsg string) error {
@@ -277,9 +364,11 @@ func (d *DB) SetStatus(id int64, status, errMsg string) error {
 	return err
 }
 
+// MarkStarted clears the previous run's outcome as a download starts, so a
+// re-run of a done or failed download stops reading as done or failed.
 func (d *DB) MarkStarted(id int64) error {
 	_, err := d.sql.Exec(`UPDATE downloads SET status = ?, started_at = ?, error = '' WHERE id = ?`,
-		StatusRunning, time.Now().Unix(), id)
+		StatusPending, time.Now().Unix(), id)
 	return err
 }
 
@@ -398,14 +487,7 @@ func (d *DB) SetSelectedFile(downloadID, fileID int64) error {
 	return err
 }
 
-// ResetRunning is boot recovery: anything left 'running' by a previous
-// process becomes 'stopped' (resumable).
-func (d *DB) ResetRunning() error {
-	_, err := d.sql.Exec(`UPDATE downloads SET status = ? WHERE status = ?`, StatusStopped, StatusRunning)
-	return err
-}
-
-const fileCols = `id, download_id, node_handle, remote_path, local_path, size, status, wanted`
+const fileCols = `id, download_id, node_handle, remote_path, local_path, size, status, queued`
 
 func (d *DB) Files(downloadID int64) ([]File, error) {
 	rows, err := d.sql.Query(`SELECT `+fileCols+`
@@ -418,7 +500,7 @@ func (d *DB) Files(downloadID int64) ([]File, error) {
 	for rows.Next() {
 		var f File
 		if err := rows.Scan(&f.ID, &f.DownloadID, &f.NodeHandle, &f.RemotePath,
-			&f.LocalPath, &f.Size, &f.Status, &f.Wanted); err != nil {
+			&f.LocalPath, &f.Size, &f.Status, &f.Queued); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -426,24 +508,35 @@ func (d *DB) Files(downloadID int64) ([]File, error) {
 	return out, rows.Err()
 }
 
-// PartialDownloads reports which downloads still have files that never landed
-// on disk — deselected, pending or errored. A finished download in that set
-// only covers part of its folder, which the list marks differently from one
-// that mirrors the folder completely.
-func (d *DB) PartialDownloads() (map[int64]bool, error) {
-	rows, err := d.sql.Query(`SELECT DISTINCT download_id FROM download_files
-		WHERE status NOT IN (?, ?)`, FileDone, FileSkipped)
+// FileCount summarises one download's file rows.
+type FileCount struct {
+	Total  int
+	Landed int // bytes all on disk: downloaded here, or already there
+}
+
+// Complete reports whether every file the listing knows about is on disk,
+// including the ones the user never queued. That is what earns a download the
+// completed marker: anything less is only part of the folder.
+func (c FileCount) Complete() bool { return c.Total > 0 && c.Landed == c.Total }
+
+// FileCounts summarises every download's files in one pass, for the list
+// markers.
+func (d *DB) FileCounts() (map[int64]FileCount, error) {
+	rows, err := d.sql.Query(`SELECT download_id, COUNT(*),
+		COUNT(CASE WHEN status IN ('done','skipped') THEN 1 END)
+		FROM download_files GROUP BY download_id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make(map[int64]bool)
+	out := make(map[int64]FileCount)
 	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var c FileCount
+		if err := rows.Scan(&id, &c.Total, &c.Landed); err != nil {
 			return nil, err
 		}
-		out[id] = true
+		out[id] = c
 	}
 	return out, rows.Err()
 }
@@ -452,23 +545,81 @@ func (d *DB) File(id int64) (*File, error) {
 	var f File
 	err := d.sql.QueryRow(`SELECT `+fileCols+` FROM download_files WHERE id = ?`, id).
 		Scan(&f.ID, &f.DownloadID, &f.NodeHandle, &f.RemotePath,
-			&f.LocalPath, &f.Size, &f.Status, &f.Wanted)
+			&f.LocalPath, &f.Size, &f.Status, &f.Queued)
 	if err != nil {
 		return nil, err
 	}
 	return &f, nil
 }
 
-func (d *DB) SetFileWanted(fileID int64, wanted bool) error {
-	_, err := d.sql.Exec(`UPDATE download_files SET wanted = ? WHERE id = ?`, wanted, fileID)
+// SetFileQueued adds one file to the queue or takes it out. Queueing clears a
+// previous failure in the same statement: a file left in 'error' is inert, so
+// without this the file would go back in the queue and never be fetched.
+func (d *DB) SetFileQueued(fileID int64, queued bool) error {
+	if !queued {
+		_, err := d.sql.Exec(`UPDATE download_files SET queued = 0 WHERE id = ?`, fileID)
+		return err
+	}
+	_, err := d.sql.Exec(`UPDATE download_files SET queued = 1,
+		status = CASE WHEN status = 'error' THEN 'pending' ELSE status END
+		WHERE id = ?`, fileID)
 	return err
 }
 
-// RecalcTotalBytes rebases a download's total on its wanted files, so
-// progress and sizes track the effective selection.
+// SetDownloadQueued adds a whole download to the queue or takes it out.
+// Queueing takes everything that is not already on disk — the selection made
+// when the link was added is not preserved, since the user can pick files out
+// again from the file pane — and stamps queued_at so the download joins the
+// back of the queue.
+func (d *DB) SetDownloadQueued(downloadID int64, queued bool) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if queued {
+		if _, err := tx.Exec(`UPDATE download_files SET queued = 1,
+			status = CASE WHEN status = 'error' THEN 'pending' ELSE status END
+			WHERE download_id = ? AND status NOT IN ('done','skipped')`, downloadID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE downloads SET queued_at = ? WHERE id = ?`,
+			time.Now().Unix(), downloadID); err != nil {
+			return err
+		}
+	} else if _, err := tx.Exec(`UPDATE download_files SET queued = 0 WHERE download_id = ?`,
+		downloadID); err != nil {
+		return err
+	}
+	if err := recalcTotalBytes(tx, downloadID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// DequeuePendingFiles drops whatever a finished run left unfetched out of the
+// queue. It is the brake on retry loops: a download whose run failed partway
+// leaves the queue instead of being started again immediately, and the user
+// decides whether to put it back. total_bytes is deliberately left alone —
+// it describes the download, not the outcome of one run.
+func (d *DB) DequeuePendingFiles(downloadID int64) error {
+	_, err := d.sql.Exec(`UPDATE download_files SET queued = 0
+		WHERE download_id = ? AND status = 'pending'`, downloadID)
+	return err
+}
+
+// RecalcTotalBytes rebases a download's total on its queued files, so progress
+// and sizes track what is actually being fetched.
 func (d *DB) RecalcTotalBytes(downloadID int64) error {
-	_, err := d.sql.Exec(`UPDATE downloads SET total_bytes = COALESCE(
-		(SELECT SUM(size) FROM download_files WHERE download_id = ? AND wanted = 1), 0)
+	return recalcTotalBytes(d.sql, downloadID)
+}
+
+func recalcTotalBytes(x interface {
+	Exec(string, ...any) (sql.Result, error)
+}, downloadID int64) error {
+	_, err := x.Exec(`UPDATE downloads SET total_bytes = COALESCE(
+		(SELECT SUM(size) FROM download_files WHERE download_id = ? AND queued = 1), 0)
 		WHERE id = ?`, downloadID, downloadID)
 	return err
 }
@@ -482,13 +633,6 @@ func (d *DB) SetFileStatusByLocalPath(downloadID int64, localPath, status string
 func (d *DB) SetFileStatusByHandle(downloadID int64, handle, status string) error {
 	_, err := d.sql.Exec(`UPDATE download_files SET status = ? WHERE download_id = ? AND node_handle = ?`,
 		status, downloadID, handle)
-	return err
-}
-
-// ResetPendingFiles rewinds non-terminal file states before a (re)run.
-func (d *DB) ResetPendingFiles(downloadID int64) error {
-	_, err := d.sql.Exec(`UPDATE download_files SET status = 'pending'
-		WHERE download_id = ? AND status = 'error'`, downloadID)
 	return err
 }
 
