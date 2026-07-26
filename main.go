@@ -47,7 +47,7 @@ func run() error {
 	eng.Kick() // pick up queued downloads from a previous session
 
 	app := ui.NewApp(cfg, database, eng, drv)
-	program := tea.NewProgram(app, tea.WithAltScreen())
+	program := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = program.Run()
 	return err
 }

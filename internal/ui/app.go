@@ -30,6 +30,8 @@ type App struct {
 	drv mega.Driver
 
 	width, height int
+	// body geometry from the last render, for translating mouse events
+	bodyTop, bodyHeight int
 
 	downloads downloadsModel
 	addlink   *addlinkModel
@@ -115,6 +117,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		a.spinner, cmd = a.spinner.Update(msg)
 		return a, cmd
+
+	case tea.MouseMsg:
+		// header and footer are inert; everything else is addressed in
+		// body coordinates
+		if msg.Y < a.bodyTop || msg.Y >= a.bodyTop+a.bodyHeight {
+			return a, nil
+		}
+		msg.Y -= a.bodyTop
+		if a.addlink != nil {
+			model, cmd := a.addlink.update(msg)
+			a.addlink = model
+			return a, cmd
+		}
+		return a, a.downloads.update(msg)
 	}
 
 	// modal add-link flow captures everything while open
@@ -151,12 +167,15 @@ func (a *App) View() string {
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
+	a.bodyTop, a.bodyHeight = lipgloss.Height(header), bodyHeight
 
 	body := a.downloads.view(a.width, bodyHeight)
 	body = lipgloss.NewStyle().Height(bodyHeight).MaxHeight(bodyHeight).Render(body)
 	if a.addlink != nil {
 		// add-link flow renders as a dialog centered over the downloads view
-		body = overlayCenter(body, a.addlink.view(), a.width, bodyHeight)
+		dialog := a.addlink.view()
+		a.addlink.modal = overlayRect(dialog, a.width, bodyHeight)
+		body = overlayCenter(body, dialog, a.width, bodyHeight)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)

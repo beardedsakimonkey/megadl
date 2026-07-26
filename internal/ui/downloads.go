@@ -50,6 +50,11 @@ type downloadsModel struct {
 	refreshing    bool // remote listing fetch in flight
 	notice        string
 
+	// Pane geometry recorded by view so mouse events can be mapped back
+	// onto rows; coordinates are relative to the top-left of the body.
+	listW, filesW, paneHeight int
+	clicks                    clickTracker
+
 	// openFile plays a downloaded file; nil means openInMPV. Test seam so
 	// tests never spawn a real player.
 	openFile func(path string) error
@@ -182,6 +187,10 @@ func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 
+	if mouse, ok := msg.(tea.MouseMsg); ok {
+		return m.mouse(mouse)
+	}
+
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return nil
@@ -286,6 +295,102 @@ func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// mouse routes a click or wheel notch to the pane under the pointer. Its
+// coordinates are body-relative, and the pane geometry is the one view
+// recorded on the last render.
+func (m *downloadsModel) mouse(msg tea.MouseMsg) tea.Cmd {
+	if len(m.rows) == 0 || msg.Y < 0 || msg.Y >= m.paneHeight {
+		return nil
+	}
+	inFiles := m.filesW > 0 && msg.X >= m.listW
+
+	if delta := wheelDelta(msg); delta != 0 {
+		if inFiles {
+			m.selectFile(m.fileCursor + delta)
+		} else {
+			m.selectRow(m.cursor + delta)
+		}
+		return nil
+	}
+	if !leftPress(msg) {
+		return nil
+	}
+	// a click anywhere dismisses a pending removal, like any other key
+	m.notice, m.confirmRemove = "", false
+
+	if inFiles {
+		return m.clickFile(msg.Y)
+	}
+	m.clickDownload(msg.Y)
+	return nil
+}
+
+// clickDownload selects the download on body row y; clicking the selected
+// row again moves focus to its files, the way enter does.
+func (m *downloadsModel) clickDownload(y int) {
+	i := m.scroll + y
+	if i >= len(m.rows) {
+		return
+	}
+	double := m.clicks.press(clickDownload, i)
+	m.selectRow(i)
+	if double && len(m.files) > 0 {
+		m.pane = paneFiles
+	}
+}
+
+// clickFile selects the file on body row y of the file pane, and plays it on
+// a double click. Clicking a directory header selects the first file under it.
+func (m *downloadsModel) clickFile(y int) tea.Cmd {
+	if y == 0 || m.cursor >= len(m.rows) {
+		return nil // pane title
+	}
+	rows := fileTreeRows(m.files, m.rows[m.cursor].DestPath)
+	i := m.fileScroll + y - 1
+	if i < 0 || i >= len(rows) {
+		return nil
+	}
+	target := rows[i].file
+	if rows[i].dir != "" {
+		target = -1
+		for j := i + 1; j < len(rows); j++ {
+			if rows[j].dir == "" {
+				target = rows[j].file
+				break
+			}
+		}
+		if target < 0 {
+			return nil
+		}
+	}
+	double := m.clicks.press(clickFile, target)
+	m.selectFile(target)
+	if double && rows[i].dir == "" {
+		return m.openSelectedFile()
+	}
+	return nil
+}
+
+// selectRow focuses the downloads pane and moves its cursor to i, clamped.
+func (m *downloadsModel) selectRow(i int) {
+	m.pane = paneList
+	i = min(max(i, 0), len(m.rows)-1)
+	if i == m.cursor {
+		return
+	}
+	m.cursor = i
+	m.loadFiles()
+}
+
+// selectFile focuses the file pane and moves its cursor to i, clamped.
+func (m *downloadsModel) selectFile(i int) {
+	if len(m.files) == 0 {
+		return
+	}
+	m.pane = paneFiles
+	m.fileCursor = min(max(i, 0), len(m.files)-1)
 }
 
 // refreshListing re-fetches the remote listing for the selected folder
@@ -419,6 +524,7 @@ func (m *downloadsModel) help() string {
 }
 
 func (m *downloadsModel) view(width, height int) string {
+	m.listW, m.filesW, m.paneHeight = width, 0, 0
 	if len(m.rows) == 0 {
 		return styleDim.Render("\n  no downloads yet — press 'a' to add a mega.nz link")
 	}
@@ -441,6 +547,7 @@ func (m *downloadsModel) view(width, height int) string {
 	if filesW == 0 {
 		m.pane = paneList // pane hidden (narrow terminal) — focus can't live there
 	}
+	m.listW, m.filesW, m.paneHeight = listW, filesW, paneHeight
 
 	list := m.listView(listW, paneHeight)
 	body := list

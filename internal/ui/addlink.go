@@ -70,6 +70,11 @@ type addlinkModel struct {
 	existing *db.Download
 	errMsg   string
 
+	// modal is where the last render placed the dialog, in body
+	// coordinates, so clicks can be mapped onto picker rows.
+	modal  rect
+	clicks clickTracker
+
 	decodeSrc    string // base64 text as pasted
 	decodeTarget string // decoded mega.nz link
 	decodeFrame  int
@@ -251,8 +256,64 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
 
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
+
 	case tea.KeyMsg:
 		return m.updateKey(msg)
+	}
+	return m, nil
+}
+
+// pickerVisible is how many picker rows the modal shows; the scroll math and
+// the renderer have to agree on it or the cursor can drift out of view.
+func (m *addlinkModel) pickerVisible() int {
+	return max(3, m.app.height-12)
+}
+
+// pickerRowsTop is the body row the picker's first entry renders on: the
+// modal's border and padding, then the title and the blank line under it.
+func (m *addlinkModel) pickerRowsTop() int {
+	return m.modal.y + styleModal.GetBorderTopSize() + styleModal.GetPaddingTop() + 2
+}
+
+// pickerRowAt maps body coordinates onto a picker row index, or -1 when the
+// pointer isn't over one.
+func (m *addlinkModel) pickerRowAt(x, y int) int {
+	if !m.modal.contains(x, y) {
+		return -1
+	}
+	row := y - m.pickerRowsTop()
+	if row < 0 || row >= m.pickerVisible() {
+		return -1
+	}
+	if i := m.picker.offset + row; i < len(m.picker.rows) {
+		return i
+	}
+	return -1
+}
+
+// updateMouse drives the file picker; the other states are text prompts with
+// nothing to aim at.
+func (m *addlinkModel) updateMouse(msg tea.MouseMsg) (*addlinkModel, tea.Cmd) {
+	if m.state != statePicker {
+		return m, nil
+	}
+	if delta := wheelDelta(msg); delta != 0 {
+		m.picker.move(delta, m.pickerVisible())
+		return m, nil
+	}
+	if !leftPress(msg) {
+		return m, nil
+	}
+	row := m.pickerRowAt(msg.X, msg.Y)
+	if row < 0 {
+		return m, nil
+	}
+	m.errMsg = ""
+	m.picker.move(row-m.picker.cursor, m.pickerVisible())
+	if m.clicks.press(clickPicker, row) {
+		m.picker.toggle(row) // double click checks the row, like space
 	}
 	return m, nil
 }
@@ -315,7 +376,7 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 		}
 
 	case statePicker:
-		visible := max(3, m.app.height-10)
+		visible := m.pickerVisible()
 		switch key.String() {
 		case "esc":
 			return nil, nil
@@ -569,7 +630,7 @@ func (m *addlinkModel) view() string {
 			m.spin.View() + " fetching listing…\n" + styleDim.Render(truncateMiddle(m.url, 70))
 	case statePicker:
 		body = styleTitle.Render("Choose files") + "\n\n" +
-			m.picker.view(m.app.width-8, m.app.height-12)
+			m.picker.view(m.app.width-8, m.pickerVisible())
 		if m.errMsg != "" {
 			body += "\n" + styleError.Render(m.errMsg)
 		}
