@@ -150,6 +150,14 @@ func humanRate(bps float64) string {
 	return humanBytes(int64(bps)) + "/s"
 }
 
+// percentText renders frac as a fixed-width percentage. It rounds down, the
+// way the bars fill cells, so a bar with an empty cell left never sits beside
+// "100%": the pair only reads complete when the transfer actually is.
+func percentText(frac float64) string {
+	frac = min(1, max(0, frac))
+	return fmt.Sprintf("%3d%%", int(frac*100))
+}
+
 // progressBar renders a fixed-width bar for frac in [0,1].
 func progressBar(width int, frac float64) string {
 	if width < 2 {

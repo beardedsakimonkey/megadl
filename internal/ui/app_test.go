@@ -148,6 +148,38 @@ func TestStatusbarHoldsLastTransferOnceTheEngineGoesIdle(t *testing.T) {
 	}
 }
 
+// The engine usually finishes between renders, so the frame the strip is
+// holding stops a chunk short of the file size. A finished download reads as
+// finished anyway: a full bar beside 100%, not 19 of 20 cells beside "100%".
+func TestStatusbarCompletesHeldBarForFinishedDownload(t *testing.T) {
+	app := heldBarApp(db.StatusDone)
+	app.lastBar.FileDone = 9_990
+	app.lastBar.FileSize = 10_000
+
+	got := ansi.Strip(app.statusbarView())
+	if !strings.Contains(got, "100%") {
+		t.Fatalf("held statusbar = %q, want 100%%", got)
+	}
+	if strings.Contains(got, "░") {
+		t.Fatalf("held statusbar = %q, want a full bar", got)
+	}
+}
+
+// A stopped download's strip is left where the transfer really stopped.
+func TestStatusbarKeepsHeldBarShortForUnfinishedDownload(t *testing.T) {
+	app := heldBarApp(db.StatusStopped)
+	app.lastBar.FileDone = 9_990
+	app.lastBar.FileSize = 10_000
+
+	got := ansi.Strip(app.statusbarView())
+	if !strings.Contains(got, "99%") {
+		t.Fatalf("held statusbar = %q, want 99%%", got)
+	}
+	if !strings.Contains(got, "░") {
+		t.Fatalf("held statusbar = %q, want an unfilled cell", got)
+	}
+}
+
 // A stopped download keeps its strip too, wearing the same icon its row does.
 func TestStatusbarHoldsStoppedTransfer(t *testing.T) {
 	app := heldBarApp(db.StatusStopped)

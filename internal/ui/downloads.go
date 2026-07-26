@@ -53,6 +53,11 @@ type downloadsModel struct {
 	confirmRemove bool // pending x confirmation for rows[cursor]
 	refreshing    bool // remote listing fetch in flight
 	notice        string
+	// quotaDismissed is the download whose quota banner esc hid. The engine
+	// keeps reporting the stall for the rest of that download's run, so
+	// hiding has to be remembered; a stall under any other download is news
+	// again and speaks up.
+	quotaDismissed int64
 
 	// Pane geometry recorded by view so mouse events can be mapped back
 	// onto rows; coordinates are relative to the top-left of the body.
@@ -252,10 +257,8 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	m.notice = ""
-
 	if m.confirmRemove {
-		m.confirmRemove = false
+		m.confirmRemove, m.notice = false, ""
 		if key.String() == "y" || key.String() == "Y" {
 			if m.cursor < len(m.rows) {
 				m.app.db.DeleteDownload(m.rows[m.cursor].ID)
@@ -264,6 +267,15 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	}
+
+	// esc only silences the detail strip: it never moves the selection, so
+	// dropping a message can't cost you your place. Every other key clears
+	// the notice as a side effect of acting.
+	if key.String() == "esc" {
+		m.dismissDetail()
+		return nil
+	}
+	m.notice = ""
 
 	if key.String() == "R" {
 		return m.refreshListing()
@@ -285,7 +297,7 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 			m.toggleFile()
 		case "r":
 			return m.startRename()
-		case "esc", "left", "h":
+		case "left", "h":
 			m.pane = paneList
 		}
 		return nil
@@ -324,6 +336,19 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// dismissDetail hides what the detail strip is saying right now. A selected
+// row's error is left alone: it describes the row rather than the moment, and
+// it goes away with the selection.
+func (m *downloadsModel) dismissDetail() {
+	m.notice = ""
+	if m.app == nil || m.app.eng == nil {
+		return
+	}
+	if snap := m.app.eng.Snapshot(); snap.QuotaStalled {
+		m.quotaDismissed = snap.ActiveID
+	}
 }
 
 // running reports whether dl is working through its queue right now, and so
@@ -645,7 +670,7 @@ func (m *downloadsModel) help() string {
 			shortcut{keys: []string{"s"}, label: m.toggleLabel() + " file"},
 			shortcut{keys: []string{"r"}, label: "rename"},
 			shortcut{keys: []string{"R"}, label: "refresh listing"},
-			shortcut{keys: []string{"esc"}, label: "back"},
+			shortcut{keys: []string{"h"}, label: "back"},
 			shortcut{keys: []string{"q"}, label: "quit"},
 		)
 	}
@@ -884,7 +909,7 @@ func filesTitle(dl *db.Download, done, total int, haveBytes, totalBytes int64, w
 		return styleTitle.Render(truncate(dl.Name, width))
 	}
 	barW := min(16, max(6, width/3))
-	progress := progressBar(barW, frac) + " " + styleTitle.Render(fmt.Sprintf("%3.0f%%", frac*100))
+	progress := progressBar(barW, frac) + " " + styleTitle.Render(percentText(frac))
 	progressW := lipgloss.Width(progress)
 	leftW := max(1, width-progressW-2)
 
@@ -940,7 +965,7 @@ func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Sna
 
 	name := fileName(filepath.Base(f.LocalPath), nameW)
 	frac := fileProgress(f, snap, fetching, m.partials[f.ID])
-	percent := fmt.Sprintf("%3.0f%%", frac*100)
+	percent := percentText(frac)
 	size := fmt.Sprintf("%*s", sizeW, fileBytes(f.Size))
 	padW := contentW - 2 - nameW - progressW - 2 - sizeW
 	padding := strings.Repeat(" ", max(0, padW))
@@ -1029,7 +1054,7 @@ func (m *downloadsModel) detailView(width int) string {
 	var lines []string
 	snap := m.app.eng.Snapshot()
 
-	if snap.QuotaStalled {
+	if snap.QuotaStalled && m.quotaDismissed != snap.ActiveID {
 		lines = append(lines, " "+styleError.Render("QUOTA — mega is throttling, retrying"))
 	}
 

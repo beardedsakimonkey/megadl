@@ -290,6 +290,12 @@ func (a *App) statusbarView() string {
 		a.lastBar = engine.Snapshot{}
 		return ""
 	}
+	if row.Status == db.StatusDone && held.FileSize > 0 {
+		// The last frame drawn is usually a progress event or two short of
+		// the end, since the download finishes between renders. The file did
+		// land in full, so the held strip says so rather than freezing at 99%.
+		held.FileDone = held.FileSize
+	}
 	// the row's own icon, so the strip and the list agree on how it went
 	marker := statusIcon(row.Status, false, a.downloads.partialDownloads[row.ID], "")
 	return statusbarLine(held, marker, a.width)
@@ -315,7 +321,7 @@ func statusbarLine(snap engine.Snapshot, marker string, width int) string {
 	if snap.FileSize > 0 {
 		frac = min(1, max(0, float64(snap.FileDone)/float64(snap.FileSize)))
 	}
-	percent := fmt.Sprintf("%3.0f%%", frac*100)
+	percent := percentText(frac)
 	bytes := bytesPair(snap.FileDone, snap.FileSize)
 	// A zero rate keeps its (blank) column so the line doesn't reflow
 	// when the transfer stalls or has just started.

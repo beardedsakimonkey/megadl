@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 
 	"megadl/internal/db"
 	"megadl/internal/engine"
+	"megadl/internal/mega"
 )
 
 func TestProgressBarUsesGreenProgressStyle(t *testing.T) {
@@ -719,6 +722,93 @@ func TestStopKeyOnDownloadedFileNotices(t *testing.T) {
 	}
 }
 
+func TestEscDismissesNoticeAndKeepsSelection(t *testing.T) {
+	app, _, _ := toggleTestApp(t)
+	m := &app.downloads
+	m.pane = paneFiles
+	m.fileCursor = 1
+	m.notice = "something happened"
+
+	m.update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.notice != "" {
+		t.Fatalf("notice = %q, want it dismissed", m.notice)
+	}
+	if m.pane != paneFiles || m.fileCursor != 1 {
+		t.Fatalf("esc moved the selection: pane %v, file cursor %d", m.pane, m.fileCursor)
+	}
+
+	// esc with nothing to dismiss still leaves the panes alone; h goes back
+	m.update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.pane != paneFiles {
+		t.Fatal("esc left the files pane")
+	}
+	pressKey(m, "h")
+	if m.pane != paneList {
+		t.Fatal("h did not leave the files pane")
+	}
+}
+
+// stalledDriver reports a quota stall on the file it starts, then waits to be
+// stopped, so the engine keeps the stall in its snapshot the way a real 509
+// does.
+type stalledDriver struct{}
+
+func (stalledDriver) List(context.Context, string) ([]mega.Node, error) { return nil, nil }
+
+func (stalledDriver) Start(context.Context, mega.DownloadArgs) (mega.Proc, error) {
+	p := &stalledProc{events: make(chan mega.Event, 4), stop: make(chan struct{})}
+	go func() {
+		p.events <- mega.FileStartEvent{Path: "/dl/Folder/a", Remote: "/Folder/a", Size: 100}
+		p.events <- mega.QuotaEvent{Line: "Server returned 509 (over quota)"}
+		<-p.stop
+		p.events <- mega.ExitEvent{}
+		close(p.events)
+	}()
+	return p, nil
+}
+
+type stalledProc struct {
+	events   chan mega.Event
+	stop     chan struct{}
+	stopOnce sync.Once
+}
+
+func (p *stalledProc) Events() <-chan mega.Event { return p.events }
+func (p *stalledProc) Stop()                     { p.stopOnce.Do(func() { close(p.stop) }) }
+
+func TestEscDismissesQuotaBanner(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+	app.eng = engine.New(stalledDriver{}, database)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go app.eng.Run(ctx)
+	app.eng.Kick()
+	t.Cleanup(func() { app.eng.Stop(id) })
+
+	m := &app.downloads
+	deadline := time.Now().Add(2 * time.Second)
+	for !app.eng.Snapshot().QuotaStalled {
+		if time.Now().After(deadline) {
+			t.Fatal("engine never reported the quota stall")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	m.reload()
+	if !strings.Contains(m.detailView(80), "QUOTA") {
+		t.Fatal("detail strip should show the quota banner while stalled")
+	}
+
+	m.update(tea.KeyMsg{Type: tea.KeyEsc})
+	if strings.Contains(m.detailView(80), "QUOTA") {
+		t.Fatal("esc did not dismiss the quota banner")
+	}
+	// still hidden on later frames, since the engine keeps reporting the stall
+	pressKey(m, "j")
+	if strings.Contains(m.detailView(80), "QUOTA") {
+		t.Fatal("quota banner came back after being dismissed")
+	}
+}
+
 func TestToggleLabelFollowsSelection(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	m := &app.downloads
@@ -847,5 +937,25 @@ func TestSelectionIsRestoredInANewSession(t *testing.T) {
 	}
 	if got := next.downloads.files[next.downloads.fileCursor].ID; got != wantFile {
 		t.Fatalf("restored file = %d, want %d", got, wantFile)
+	}
+}
+
+// The bar fills whole cells, so the percentage next to it has to round the
+// same way: a transfer one chunk short must not read "100%" beside a bar with
+// an empty cell left in it.
+func TestPercentTextNeverReadsCompleteBeforeTheBarFills(t *testing.T) {
+	for _, frac := range []float64{0.996, 0.9999} {
+		if got := percentText(frac); got != " 99%" {
+			t.Fatalf("percentText(%v) = %q, want %q", frac, got, " 99%")
+		}
+		if bar := ansi.Strip(progressBar(20, frac)); !strings.Contains(bar, "░") {
+			t.Fatalf("progressBar(20, %v) = %q, want an unfilled cell", frac, bar)
+		}
+	}
+	if got := percentText(1); got != "100%" {
+		t.Fatalf("percentText(1) = %q, want %q", got, "100%")
+	}
+	if bar := ansi.Strip(progressBar(20, 1)); strings.Contains(bar, "░") {
+		t.Fatalf("progressBar(20, 1) = %q, want it full", bar)
 	}
 }
