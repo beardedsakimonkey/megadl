@@ -230,6 +230,8 @@ func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
 			return m.openSelectedFile()
 		case "s":
 			m.toggleFile()
+		case "r":
+			return m.startRename()
 		case "esc", "left", "h":
 			m.pane = paneList
 		}
@@ -253,6 +255,8 @@ func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
 		}
 	case "s":
 		m.toggleDownload()
+	case "r":
+		return m.startRename()
 	case "x":
 		if m.cursor < len(m.rows) {
 			if m.rows[m.cursor].ID == m.app.eng.ActiveID() {
@@ -313,6 +317,21 @@ func (m *downloadsModel) toggleFile() {
 		m.app.eng.ResumeFile(f.ID)
 		m.reload()
 	}
+}
+
+// startRename opens the rename prompt for the selected download. An active
+// download is refused because the fetch writes through the paths being moved.
+func (m *downloadsModel) startRename() tea.Cmd {
+	if m.cursor >= len(m.rows) {
+		return nil
+	}
+	dl := m.rows[m.cursor]
+	if dl.ID == m.app.eng.ActiveID() {
+		m.notice = "stop the download before renaming it"
+		return nil
+	}
+	m.app.rename = newRenameModel(m.app, dl)
+	return m.app.rename.init()
 }
 
 // mouse routes a click or wheel notch to the pane under the pointer. Its
@@ -571,6 +590,7 @@ func (m *downloadsModel) help() string {
 			shortcut{keys: []string{"j/k"}, label: "move"},
 			shortcut{keys: []string{"⏎"}, label: "play"},
 			shortcut{keys: []string{"s"}, label: m.toggleLabel() + " file"},
+			shortcut{keys: []string{"r"}, label: "rename"},
 			shortcut{keys: []string{"R"}, label: "refresh listing"},
 			shortcut{keys: []string{"esc"}, label: "back"},
 			shortcut{keys: []string{"q"}, label: "quit"},
@@ -580,6 +600,7 @@ func (m *downloadsModel) help() string {
 		shortcut{keys: []string{"a"}, label: "add"},
 		shortcut{keys: []string{"⏎"}, label: "files"},
 		shortcut{keys: []string{"s"}, label: m.toggleLabel()},
+		shortcut{keys: []string{"r"}, label: "rename"},
 		shortcut{keys: []string{"R"}, label: "refresh"},
 		shortcut{keys: []string{"x"}, label: "remove"},
 		shortcut{keys: []string{"y"}, label: "copy url"},

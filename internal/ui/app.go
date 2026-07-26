@@ -35,6 +35,7 @@ type App struct {
 
 	downloads downloadsModel
 	addlink   *addlinkModel
+	rename    *renameModel
 
 	spinner  spinner.Model
 	spinning bool // spinner tick loop in flight
@@ -133,6 +134,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		msg.Y -= a.bodyTop
+		if a.rename != nil {
+			return a, nil // a bare prompt has nothing to aim at
+		}
 		if a.addlink != nil {
 			model, cmd := a.addlink.update(msg)
 			a.addlink = model
@@ -141,10 +145,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.downloads.update(msg)
 	}
 
-	// modal add-link flow captures everything while open
+	// modal flows capture everything while open, pastes included
 	if a.addlink != nil {
 		model, cmd := a.addlink.update(msg)
 		a.addlink = model
+		return a, cmd
+	}
+	if a.rename != nil {
+		model, cmd := a.rename.update(msg)
+		a.rename = model
 		return a, cmd
 	}
 
@@ -188,11 +197,14 @@ func (a *App) View() string {
 
 	body := a.downloads.view(a.width, bodyHeight)
 	body = lipgloss.NewStyle().Height(bodyHeight).MaxHeight(bodyHeight).Render(body)
-	if a.addlink != nil {
+	switch {
+	case a.addlink != nil:
 		// add-link flow renders as a dialog centered over the downloads view
 		dialog := a.addlink.view()
 		a.addlink.modal = overlayRect(dialog, a.width, bodyHeight)
 		body = overlayCenter(body, dialog, a.width, bodyHeight)
+	case a.rename != nil:
+		body = overlayCenter(body, a.rename.view(), a.width, bodyHeight)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
@@ -291,8 +303,11 @@ func statusbarLine(snap engine.Snapshot, frame string, width int) string {
 }
 
 func (a *App) helpLine() string {
-	if a.addlink != nil {
+	switch {
+	case a.addlink != nil:
 		return a.addlink.help()
+	case a.rename != nil:
+		return a.rename.help()
 	}
 	return a.downloads.help()
 }

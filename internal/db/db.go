@@ -283,14 +283,21 @@ func (d *DB) DeleteDownload(id int64) error {
 	return err
 }
 
-func (d *DB) RenameDownload(id int64, name, destPath string) error {
-	_, err := d.sql.Exec(`UPDATE downloads SET name = ?, dest_path = ? WHERE id = ?`, name, destPath, id)
-	return err
+// RenameDownload gives a download a new name and destination, carrying its
+// recorded local file paths along without touching files on disk.
+func (d *DB) RenameDownload(id int64, name, oldDestPath, newDestPath string) error {
+	return d.rebaseDownload(id, name, oldDestPath, newDestPath)
 }
 
 // RebaseDownloadPath moves a download's destination and all of its recorded
 // local file paths to a new root without touching files on disk.
 func (d *DB) RebaseDownloadPath(id int64, oldDestPath, newDestPath string) error {
+	return d.rebaseDownload(id, "", oldDestPath, newDestPath)
+}
+
+// rebaseDownload repoints dest_path and every recorded local_path from
+// oldDestPath to newDestPath, and renames the download when name is non-empty.
+func (d *DB) rebaseDownload(id int64, name, oldDestPath, newDestPath string) error {
 	tx, err := d.sql.Begin()
 	if err != nil {
 		return err
@@ -330,6 +337,11 @@ func (d *DB) RebaseDownloadPath(id int64, oldDestPath, newDestPath string) error
 	}
 	if _, err := tx.Exec(`UPDATE downloads SET dest_path = ? WHERE id = ?`, newDestPath, id); err != nil {
 		return err
+	}
+	if name != "" {
+		if _, err := tx.Exec(`UPDATE downloads SET name = ? WHERE id = ?`, name, id); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

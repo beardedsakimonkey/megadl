@@ -235,9 +235,45 @@ func TestFindByDestPath(t *testing.T) {
 		t.Fatalf("unexpected match: %+v", dl)
 	}
 
-	d.RenameDownload(id2, "Show2", "/lib/Show2")
+	d.RenameDownload(id2, "Show2", "/lib/Show", "/lib/Show2")
 	if dl, _ := d.FindByDestPath("/lib/Show2"); dl == nil || dl.Name != "Show2" {
 		t.Fatalf("rename not visible: %+v", dl)
+	}
+}
+
+func TestRenameDownloadCarriesFilePaths(t *testing.T) {
+	d := openTest(t)
+	id, err := d.InsertDownload(&Download{
+		URL: "u", Handle: "h", LinkType: "folder", Name: "Show", DestPath: "/lib/Show",
+	}, []File{
+		{NodeHandle: "a", RemotePath: "/Show/a.mkv", LocalPath: "/lib/Show/a.mkv", Wanted: true},
+		{NodeHandle: "b", RemotePath: "/Show/s1/b.mkv", LocalPath: "/lib/Show/s1/b.mkv", Wanted: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.RenameDownload(id, "Series", "/lib/Show", "/lib/Series"); err != nil {
+		t.Fatal(err)
+	}
+
+	dl, err := d.Download(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dl.Name != "Series" || dl.DestPath != "/lib/Series" {
+		t.Fatalf("download = %q at %q, want %q at %q", dl.Name, dl.DestPath, "Series", "/lib/Series")
+	}
+
+	files, err := d.Files(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/lib/Series/a.mkv", "/lib/Series/s1/b.mkv"}
+	for i, f := range files {
+		if f.LocalPath != want[i] {
+			t.Fatalf("file %d local path = %q, want %q", i, f.LocalPath, want[i])
+		}
 	}
 }
 
