@@ -40,6 +40,11 @@ type App struct {
 	spinner  spinner.Model
 	spinning bool // spinner tick loop in flight
 
+	// lastBar is the transfer the statusbar drew most recently. It is kept
+	// after the engine goes idle so the strip holds its final frame instead
+	// of vanishing the moment a download stops or finishes.
+	lastBar engine.Snapshot
+
 	quota6h int64
 
 	fatal string
@@ -249,18 +254,60 @@ func (a *App) footerView() string {
 	}
 	line := help + strings.Repeat(" ", gap) + quota
 
-	if a.eng != nil {
-		if bar := statusbarLine(a.eng.Snapshot(), a.spinner.View(), a.width); bar != "" {
-			return bar + "\n" + line
-		}
+	if bar := a.statusbarView(); bar != "" {
+		return bar + "\n" + line
 	}
 	return line
 }
 
-// statusbarLine renders the strip above the footer for the file the engine
-// is fetching now: spinner, name, progress bar, percent, bytes, and rate.
-// Empty when nothing is downloading.
-func statusbarLine(snap engine.Snapshot, frame string, width int) string {
+// statusbarView draws the transfer strip and remembers what it drew. Once the
+// download stops or finishes, the same line stays put with the rate column
+// cleared and the spinner replaced by the download's status icon, so the last
+// transfer remains on screen instead of the footer collapsing under it.
+func (a *App) statusbarView() string {
+	if a.eng == nil {
+		return ""
+	}
+	snap := a.eng.Snapshot()
+	if snap.ActiveID != 0 && snap.CurrentFile != "" {
+		a.lastBar = snap
+		return statusbarLine(snap, a.spinner.View(), a.width)
+	}
+
+	held := a.lastBar
+	if held.CurrentFile == "" {
+		return "" // nothing has been fetched yet this session
+	}
+	held.Rate = 0 // no bytes are moving, so the rate column stays blank
+	if snap.ActiveID == held.ActiveID {
+		// same download, merely between files: keep the spinner turning
+		return statusbarLine(held, a.spinner.View(), a.width)
+	}
+
+	row := a.downloadRow(held.ActiveID)
+	if row == nil {
+		// the download was removed from the list; let its strip go with it
+		a.lastBar = engine.Snapshot{}
+		return ""
+	}
+	// the row's own icon, so the strip and the list agree on how it went
+	marker := statusIcon(row.Status, false, a.downloads.partialDownloads[row.ID], "")
+	return statusbarLine(held, marker, a.width)
+}
+
+func (a *App) downloadRow(id int64) *db.Download {
+	for _, dl := range a.downloads.rows {
+		if dl.ID == id {
+			return dl
+		}
+	}
+	return nil
+}
+
+// statusbarLine renders the strip above the footer for a file transfer:
+// marker, name, progress bar, percent, bytes, and rate. The marker arrives
+// already styled. Empty when there is no transfer to draw.
+func statusbarLine(snap engine.Snapshot, marker string, width int) string {
 	if snap.ActiveID == 0 || snap.CurrentFile == "" {
 		return ""
 	}
@@ -302,7 +349,7 @@ func statusbarLine(snap engine.Snapshot, frame string, width int) string {
 		return ""
 	}
 
-	left := " " + styleAccent.Render(frame) + " " + truncate(snap.CurrentFile, nameW())
+	left := " " + marker + " " + truncate(snap.CurrentFile, nameW())
 	tail := progressBar(barW, frac) + " " + styleTitle.Render(percent)
 	switch stats {
 	case "":

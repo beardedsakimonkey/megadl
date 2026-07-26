@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"megadl/internal/db"
 	"megadl/internal/engine"
 )
 
@@ -110,6 +111,62 @@ func TestStatusbarEmptyWhenIdle(t *testing.T) {
 	// active download but between files: nothing is being fetched yet
 	if got := statusbarLine(engine.Snapshot{ActiveID: 3}, "⠋", 100); got != "" {
 		t.Fatalf("statusbar = %q, want empty", got)
+	}
+}
+
+// heldBarApp is an app whose engine is idle but which drew a transfer for
+// download 3 a moment ago.
+func heldBarApp(status string) *App {
+	app := &App{width: 100, eng: engine.New(nil, nil)}
+	app.downloads = newDownloadsModel(app)
+	app.downloads.rows = []*db.Download{{ID: 3, Name: "Skins", Status: status}}
+	app.lastBar = engine.Snapshot{
+		ActiveID:    3,
+		CurrentFile: "episode-01.mkv",
+		FileSize:    100,
+		FileDone:    100,
+		Rate:        2 << 20,
+	}
+	return app
+}
+
+func TestStatusbarHoldsLastTransferOnceTheEngineGoesIdle(t *testing.T) {
+	app := heldBarApp(db.StatusDone)
+
+	got := ansi.Strip(app.statusbarView())
+	for _, want := range []string{"✓ episode-01.mkv", "100%", "100 / 100 B"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("held statusbar = %q, want %q", got, want)
+		}
+	}
+	// the transfer is over, so the last measured rate must not linger
+	if strings.Contains(got, "/s") {
+		t.Fatalf("held statusbar = %q, want no rate", got)
+	}
+	if !strings.Contains(app.footerView(), app.statusbarView()) {
+		t.Fatal("footer should carry the held statusbar")
+	}
+}
+
+// A stopped download keeps its strip too, wearing the same icon its row does.
+func TestStatusbarHoldsStoppedTransfer(t *testing.T) {
+	app := heldBarApp(db.StatusStopped)
+
+	want := statusIconText(db.StatusStopped, false, false, "")
+	if got := ansi.Strip(app.statusbarView()); !strings.Contains(got, want+" episode-01.mkv") {
+		t.Fatalf("held statusbar = %q, want marker %q", got, want)
+	}
+}
+
+func TestStatusbarDropsHeldTransferWhenItsDownloadIsRemoved(t *testing.T) {
+	app := heldBarApp(db.StatusDone)
+	app.downloads.rows = nil
+
+	if got := app.statusbarView(); got != "" {
+		t.Fatalf("statusbar = %q, want empty after the download left the list", got)
+	}
+	if app.lastBar.CurrentFile != "" {
+		t.Fatalf("held snapshot = %+v, want cleared", app.lastBar)
 	}
 }
 
