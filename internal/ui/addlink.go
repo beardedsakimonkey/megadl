@@ -189,15 +189,47 @@ func (m *addlinkModel) decodeTickCmd() tea.Cmd {
 	})
 }
 
-// finishDecode ends the animation and hands the decoded link back to the URL
-// prompt so it can be reviewed before listing.
-func (m *addlinkModel) finishDecode() tea.Cmd {
+// applyDecoded stops the animation and puts the decoded link in the prompt.
+func (m *addlinkModel) applyDecoded() {
 	m.decodeSeq++
 	m.state = stateURL
 	m.urlInput.SetValue(m.decodeTarget)
 	m.urlInput.CursorEnd()
 	m.refreshLinkHint()
+}
+
+// finishDecode ends the animation and hands the decoded link back to the URL
+// prompt so it can be reviewed before listing.
+func (m *addlinkModel) finishDecode() tea.Cmd {
+	m.applyDecoded()
 	return textinput.Blink
+}
+
+// submitURL acts on the link the user pressed enter on: a mega link starts
+// listing, base64 that hides one starts the decode animation instead.
+func (m *addlinkModel) submitURL(url string) (*addlinkModel, tea.Cmd) {
+	switch {
+	case reFileLink.MatchString(url):
+		m.linkType = "file"
+	case reFolderLink.MatchString(url):
+		m.linkType = "folder"
+	default:
+		if decoded, ok := decodeBase64MegaLink(url); ok {
+			m.decodeSrc = url
+			m.decodeTarget = decoded
+			m.errMsg = ""
+			m.state = stateDecoding
+			m.decodeSeq++
+			m.decodeFrame = 0
+			return m, m.decodeTickCmd()
+		}
+		m.errMsg = "that doesn't look like a mega.nz file or folder link"
+		return m, nil
+	}
+	m.url = url
+	m.errMsg = ""
+	m.state = stateListing
+	return m, tea.Batch(m.spin.Tick, m.listCmd(url))
 }
 
 func (m *addlinkModel) listCmd(url string) tea.Cmd {
@@ -350,29 +382,7 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 			m.nextURL()
 			return m, nil
 		case "enter":
-			url := strings.TrimSpace(m.urlInput.Value())
-			switch {
-			case reFileLink.MatchString(url):
-				m.linkType = "file"
-			case reFolderLink.MatchString(url):
-				m.linkType = "folder"
-			default:
-				if decoded, ok := decodeBase64MegaLink(url); ok {
-					m.decodeSrc = url
-					m.decodeTarget = decoded
-					m.errMsg = ""
-					m.state = stateDecoding
-					m.decodeSeq++
-					m.decodeFrame = 0
-					return m, m.decodeTickCmd()
-				}
-				m.errMsg = "that doesn't look like a mega.nz file or folder link"
-				return m, nil
-			}
-			m.url = url
-			m.errMsg = ""
-			m.state = stateListing
-			return m, tea.Batch(m.spin.Tick, m.listCmd(url))
+			return m.submitURL(strings.TrimSpace(m.urlInput.Value()))
 		}
 		var cmd tea.Cmd
 		m.urlInput, cmd = m.urlInput.Update(key)
@@ -380,9 +390,14 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 		return m, cmd
 
 	case stateDecoding:
-		// esc skips the reveal; everything else waits it out
-		if key.String() == "esc" {
+		// esc cuts the reveal short and leaves the link in the prompt,
+		// enter cuts it short and acts on it; anything else waits it out
+		switch key.String() {
+		case "esc":
 			return m, m.finishDecode()
+		case "enter":
+			m.applyDecoded()
+			return m.submitURL(m.decodeTarget)
 		}
 
 	case stateListing:
@@ -616,7 +631,10 @@ func (m *addlinkModel) help() string {
 			shortcut{keys: []string{"esc"}, label: "cancel"},
 		)
 	case stateDecoding:
-		return renderShortcuts(shortcut{keys: []string{"esc"}, label: "skip"})
+		return renderShortcuts(
+			shortcut{keys: []string{"enter"}, label: "list link"},
+			shortcut{keys: []string{"esc"}, label: "skip"},
+		)
 	case stateListing:
 		return renderShortcuts(shortcut{keys: []string{"esc"}, label: "cancel"})
 	case statePicker:

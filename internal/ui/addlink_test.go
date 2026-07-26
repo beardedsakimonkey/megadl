@@ -317,6 +317,38 @@ func TestAddlinkEscSkipsDecodeAnimation(t *testing.T) {
 	}
 }
 
+func TestAddlinkEnterDuringDecodeAnimationListsLink(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	link := "https://mega.nz/folder/CCCCCCCC#0123456789abcdefghijkl"
+	encoded := base64.StdEncoding.EncodeToString([]byte(link))
+
+	m := newAddlinkModel(app)
+	m.urlInput.SetValue(encoded)
+	m.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m.update(decodeFrameMsg{seq: m.decodeSeq})
+	if m.state != stateDecoding {
+		t.Fatalf("mid-animation state = %v, want stateDecoding", m.state)
+	}
+
+	// enter cuts the animation short and acts on the decoded link
+	m, cmd := m.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.state != stateListing || m.url != link || m.linkType != "folder" {
+		t.Fatalf("after enter: state=%v url=%q type=%q", m.state, m.url, m.linkType)
+	}
+	if m.urlInput.Value() != link {
+		t.Fatalf("prompt = %q, want the decoded link", m.urlInput.Value())
+	}
+	if cmd == nil {
+		t.Fatal("expected a listing command")
+	}
+
+	// frames left over from the cancelled animation don't reopen the prompt
+	m.update(decodeFrameMsg{seq: m.decodeSeq - 1})
+	if m.state != stateListing {
+		t.Fatalf("after stale frame: state=%v, want stateListing", m.state)
+	}
+}
+
 func TestAddlinkNavigatesSubmittedLinkHistory(t *testing.T) {
 	app, database := openAddlinkTestApp(t)
 	oldURL := "https://mega.nz/file/AAAAAAAA#old"
