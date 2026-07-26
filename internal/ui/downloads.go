@@ -42,6 +42,10 @@ type downloadsModel struct {
 	// by file ID) so stopped files keep their progress bar. loadFiles
 	// refreshes it so View never touches the filesystem.
 	partials map[int64]int64
+	// partialDownloads holds the download IDs whose folder is only partly on
+	// disk, so a finished row can say "the files you picked are done" rather
+	// than "the whole folder is here". Refreshed by reload.
+	partialDownloads map[int64]bool
 	// savedDownload is the row last written to the database, so repeated
 	// events on the same row don't rewrite it.
 	savedDownload int64
@@ -99,6 +103,9 @@ func (m *downloadsModel) reload() {
 	rows, err := m.app.db.Downloads()
 	if err == nil {
 		m.rows = rows
+	}
+	if partial, err := m.app.db.PartialDownloads(); err == nil {
+		m.partialDownloads = partial
 	}
 	if m.cursor >= len(m.rows) {
 		m.cursor = max(0, len(m.rows)-1)
@@ -738,12 +745,14 @@ func (m *downloadsModel) rowView(dl *db.Download, snap engine.Snapshot, selected
 	if active && snap.Rate > 0 {
 		extra = "  " + humanRate(snap.Rate)
 	}
-	nameW := max(8, width-2-9-1-lipgloss.Width(extra)-2)
+	spin := m.app.spinFrame()
+	partial := m.partialDownloads[dl.ID]
+	nameW := max(8, width-2-1-1-lipgloss.Width(extra)-2)
 	name := truncate(dl.Name, nameW)
 
 	if selected {
 		// plain text end to end so the highlight spans the whole row
-		line := fmt.Sprintf("%s%s %s%s", marker, statusText(dl.Status, active), name, extra)
+		line := fmt.Sprintf("%s%s %s%s", marker, statusIconText(dl.Status, active, partial, spin), name, extra)
 		style := styleSelBlur
 		if m.pane == paneList {
 			style = styleSelected
@@ -751,7 +760,7 @@ func (m *downloadsModel) rowView(dl *db.Download, snap engine.Snapshot, selected
 		return style.Width(width).MaxWidth(width).Render(line)
 	}
 
-	line := fmt.Sprintf("%s%s %s", marker, statusBadge(dl.Status, active), name)
+	line := fmt.Sprintf("%s%s %s", marker, statusIcon(dl.Status, active, partial, spin), name)
 	if extra != "" {
 		line += styleOK.Render(extra)
 	}
@@ -951,14 +960,14 @@ func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Sna
 			filled := int(frac * float64(barW))
 			bar = "  " + strings.Repeat("━", filled) + strings.Repeat("─", barW-filled) + " " + percent
 		}
-		return styleSelected.Render(indent + fileMarkerText(f, fetching, frac) + " " + name + bar + "  " + size + padding)
+		return styleSelected.Render(indent + fileMarkerText(f, fetching, frac, m.app.spinFrame()) + " " + name + bar + "  " + size + padding)
 	}
 
 	bar := ""
 	if barW > 0 {
 		bar = "  " + fileProgressBar(barW, frac) + " " + styleDim.Render(percent)
 	}
-	return indent + fileMarker(f, fetching, frac) + " " + name + bar + "  " + styleDim.Render(size) + padding
+	return indent + fileMarker(f, fetching, frac, m.app.spinFrame()) + " " + name + bar + "  " + styleDim.Render(size) + padding
 }
 
 func fileProgress(f db.File, snap engine.Snapshot, fetching bool, partial int64) float64 {
@@ -987,10 +996,13 @@ func fileName(name string, width int) string {
 	return name + strings.Repeat(" ", max(0, width-lipgloss.Width(name)))
 }
 
-func fileMarkerText(f db.File, fetching bool, frac float64) string {
+// fileMarkerText is the file's one-cell marker. The file being fetched right
+// now animates with the shared spinner frame, matching the list column's
+// active row.
+func fileMarkerText(f db.File, fetching bool, frac float64, spin string) string {
 	switch {
 	case fetching:
-		return "↓"
+		return spin
 	case f.Status == db.FileDone:
 		return "✓"
 	case f.Status == db.FileSkipped:
@@ -1005,11 +1017,11 @@ func fileMarkerText(f db.File, fetching bool, frac float64) string {
 	return "·"
 }
 
-func fileMarker(f db.File, fetching bool, frac float64) string {
-	text := fileMarkerText(f, fetching, frac)
+func fileMarker(f db.File, fetching bool, frac float64, spin string) string {
+	text := fileMarkerText(f, fetching, frac, spin)
 	switch {
 	case fetching:
-		return styleDownload.Render(text)
+		return styleSpinner.Render(text)
 	case f.Status == db.FileDone || f.Status == db.FileSkipped:
 		return styleOK.Render(text)
 	case frac > 0 && f.Status != db.FileError:
@@ -1049,29 +1061,42 @@ func (m *downloadsModel) detailView(width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func statusText(status string, active bool) string {
+// statusIconText is the download's one-cell marker in the list column,
+// mirroring the file pane's markers. The engine's current download animates
+// with the shared spinner frame; a 'running' row without it is a leftover
+// from a previous session. A finished download whose folder is only partly on
+// disk gets the partial glyph, since a check would read as "the whole folder
+// is here" rather than "the files you picked are here". Every glyph must stay
+// one cell wide so the name column lines up.
+func statusIconText(status string, active, partial bool, spin string) string {
+	if active {
+		return spin
+	}
 	switch status {
 	case db.StatusQueued:
-		return "[queued ]"
+		return "○"
 	case db.StatusRunning:
-		if active {
-			return "[active ]"
-		}
-		return "[running]"
+		return "◔"
 	case db.StatusStopped:
-		return "[stopped]"
+		return "⏸︎"
 	case db.StatusDone:
-		return "[done   ]"
+		if partial {
+			return "◔"
+		}
+		return "✓"
 	case db.StatusError:
-		return "[error  ]"
+		return "✗"
 	case db.StatusQuota:
-		return "[quota  ]"
+		return "⚠"
 	}
-	return "[?      ]"
+	return "·"
 }
 
-func statusBadge(status string, active bool) string {
-	text := statusText(status, active)
+func statusIcon(status string, active, partial bool, spin string) string {
+	text := statusIconText(status, active, partial, spin)
+	if active {
+		return styleSpinner.Render(text)
+	}
 	switch status {
 	case db.StatusQueued:
 		return styleDim.Render(text)
@@ -1080,6 +1105,9 @@ func statusBadge(status string, active bool) string {
 	case db.StatusStopped:
 		return styleWarn.Render(text)
 	case db.StatusDone:
+		if partial {
+			return stylePartial.Render(text)
+		}
 		return styleOK.Render(text)
 	case db.StatusError, db.StatusQuota:
 		return styleError.Render(text)

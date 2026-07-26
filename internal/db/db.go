@@ -426,6 +426,28 @@ func (d *DB) Files(downloadID int64) ([]File, error) {
 	return out, rows.Err()
 }
 
+// PartialDownloads reports which downloads still have files that never landed
+// on disk — deselected, pending or errored. A finished download in that set
+// only covers part of its folder, which the list marks differently from one
+// that mirrors the folder completely.
+func (d *DB) PartialDownloads() (map[int64]bool, error) {
+	rows, err := d.sql.Query(`SELECT DISTINCT download_id FROM download_files
+		WHERE status NOT IN (?, ?)`, FileDone, FileSkipped)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int64]bool)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) File(id int64) (*File, error) {
 	var f File
 	err := d.sql.QueryRow(`SELECT `+fileCols+` FROM download_files WHERE id = ?`, id).

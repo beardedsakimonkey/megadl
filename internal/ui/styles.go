@@ -30,7 +30,6 @@ var (
 	styleAccent      = lipgloss.NewStyle().Foreground(colorPrimary)
 	stylePrimaryText = lipgloss.NewStyle().Foreground(colorPrimaryText)
 	styleProgress    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	styleDownload    = lipgloss.NewStyle().Foreground(colorOrange)
 	styleDecode      = lipgloss.NewStyle().Foreground(colorOrange)
 	styleSpinner     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleHelpKey     = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)

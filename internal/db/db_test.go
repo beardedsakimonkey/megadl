@@ -107,6 +107,46 @@ func TestFileWanted(t *testing.T) {
 	}
 }
 
+func TestPartialDownloads(t *testing.T) {
+	d := openTest(t)
+	id, err := d.InsertDownload(&Download{
+		URL: "u", Handle: "h", LinkType: "folder", Name: "n",
+		DestPath: "/x/n", TotalBytes: 300,
+	}, []File{
+		{NodeHandle: "h1", RemotePath: "/r/a", LocalPath: "/x/n/a", Size: 100, Wanted: true},
+		{NodeHandle: "h2", RemotePath: "/r/b", LocalPath: "/x/n/b", Size: 200, Wanted: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// only the selected file was fetched, so the folder is still partial
+	d.SetFileStatusByHandle(id, "h1", FileDone)
+	partial, err := d.PartialDownloads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !partial[id] {
+		t.Fatalf("download with a deselected file not reported partial: %v", partial)
+	}
+
+	// a file already on disk counts as covered, same as a fetched one
+	d.SetFileStatusByHandle(id, "h2", FileSkipped)
+	if partial, err = d.PartialDownloads(); err != nil {
+		t.Fatal(err)
+	} else if partial[id] {
+		t.Fatalf("fully covered download reported partial: %v", partial)
+	}
+
+	// an errored file leaves a hole again
+	d.SetFileStatusByHandle(id, "h2", FileError)
+	if partial, err = d.PartialDownloads(); err != nil {
+		t.Fatal(err)
+	} else if !partial[id] {
+		t.Fatalf("download with an errored file not reported partial: %v", partial)
+	}
+}
+
 func TestMergeFiles(t *testing.T) {
 	d := openTest(t)
 	id, err := d.InsertDownload(&Download{

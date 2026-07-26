@@ -700,7 +700,7 @@ func (m *addlinkModel) view() string {
 		body = styleTitle.Render("Already in library") + "\n\n" +
 			fmt.Sprintf("%q already represents this MEGA %s.\n\n", m.existing.Name, m.existing.LinkType) +
 			styleDim.Render(fmt.Sprintf("%s  %s\n%s",
-				statusText(m.existing.Status, false),
+				m.existing.Status,
 				humanBytes(m.existing.TotalBytes),
 				truncateMiddle(m.existing.DestPath, 70))) +
 			"\n\nReuse this download instead of creating another copy?"

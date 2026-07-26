@@ -34,7 +34,7 @@ func TestFileProgressBarUsesCenteredGlyphs(t *testing.T) {
 }
 
 func TestDownloadRowOmitsCreationDate(t *testing.T) {
-	m := &downloadsModel{pane: paneList}
+	m := &downloadsModel{pane: paneList, app: NewApp(nil, nil, nil, nil)}
 	dl := &db.Download{
 		Name:       "Show",
 		Status:     db.StatusQueued,
@@ -52,7 +52,7 @@ func TestDownloadRowOmitsCreationDate(t *testing.T) {
 }
 
 func TestDownloadRowOmitsSize(t *testing.T) {
-	m := &downloadsModel{pane: paneList}
+	m := &downloadsModel{pane: paneList, app: NewApp(nil, nil, nil, nil)}
 	dl := &db.Download{
 		Name:       "Show",
 		Status:     db.StatusQueued,
@@ -83,19 +83,55 @@ func TestFileMarkerShowsPartialProgress(t *testing.T) {
 		{name: "wanted partial", file: db.File{Wanted: true, Status: db.FilePending}, frac: 0.3, wantText: "◔", want: stylePartial.Render("◔")},
 		{name: "wanted no partial", file: db.File{Wanted: true, Status: db.FilePending}, wantText: "·", want: styleDim.Render("·")},
 		{name: "error keeps cross despite partial", file: db.File{Wanted: true, Status: db.FileError}, frac: 0.3, wantText: "✗", want: styleError.Render("✗")},
-		{name: "fetching keeps arrow", file: db.File{Wanted: true, Status: db.FilePending}, fetching: true, frac: 0.3, wantText: "↓", want: styleDownload.Render("↓")},
+		{name: "fetching spins", file: db.File{Wanted: true, Status: db.FilePending}, fetching: true, frac: 0.3, wantText: "⠋", want: styleSpinner.Render("⠋")},
 		{name: "done keeps check", file: db.File{Wanted: true, Status: db.FileDone}, frac: 1, wantText: "✓", want: styleOK.Render("✓")},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := fileMarkerText(tt.file, tt.fetching, tt.frac); got != tt.wantText {
+			if got := fileMarkerText(tt.file, tt.fetching, tt.frac, "⠋"); got != tt.wantText {
 				t.Fatalf("fileMarkerText() = %q, want %q", got, tt.wantText)
 			}
-			if got := fileMarker(tt.file, tt.fetching, tt.frac); got != tt.want {
+			if got := fileMarker(tt.file, tt.fetching, tt.frac, "⠋"); got != tt.want {
 				t.Fatalf("fileMarker() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// The list column budgets exactly one cell for the status marker, so a glyph
+// that renders wider would shift every name in the pane.
+func TestStatusIconIsOneCellWide(t *testing.T) {
+	statuses := []string{db.StatusQueued, db.StatusRunning, db.StatusStopped,
+		db.StatusDone, db.StatusError, db.StatusQuota, "somethingelse"}
+	for _, status := range statuses {
+		for _, active := range []bool{false, true} {
+			for _, partial := range []bool{false, true} {
+				got := statusIconText(status, active, partial, "⠋")
+				if w := lipgloss.Width(got); w != 1 {
+					t.Errorf("statusIconText(%q, active=%v, partial=%v) = %q, width %d, want 1",
+						status, active, partial, got, w)
+				}
+			}
+		}
+	}
+}
+
+// A finished download that only covers part of its folder must not claim the
+// whole folder is on disk.
+func TestStatusIconMarksPartiallyFinishedDownloads(t *testing.T) {
+	if got := statusIconText(db.StatusDone, false, false, "⠋"); got != "✓" {
+		t.Errorf("complete download = %q, want ✓", got)
+	}
+	if got := statusIconText(db.StatusDone, false, true, "⠋"); got != "◔" {
+		t.Errorf("partial download = %q, want ◔", got)
+	}
+	if got := statusIcon(db.StatusDone, false, true, "⠋"); got != stylePartial.Render("◔") {
+		t.Errorf("partial download = %q, want it styled as partial", got)
+	}
+	// the spinner still wins while the engine is on this row
+	if got := statusIcon(db.StatusDone, true, true, "⠋"); got != styleSpinner.Render("⠋") {
+		t.Errorf("active download = %q, want the spinner frame", got)
 	}
 }
 

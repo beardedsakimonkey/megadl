@@ -95,6 +95,19 @@ func (a *App) spinCmd() tea.Cmd {
 	return a.spinner.Tick
 }
 
+// spinFrame is the current spinner glyph without its style, so rows can color
+// it themselves or drop it into a fully highlighted line. Between downloads
+// the frame simply holds still. An app that never went through NewApp has no
+// frames to draw from; a still glyph beats the spinner's "(error)" text.
+func (a *App) spinFrame() string {
+	if a == nil || len(a.spinner.Spinner.Frames) == 0 {
+		return spinner.MiniDot.Frames[0]
+	}
+	sp := a.spinner
+	sp.Style = lipgloss.NewStyle()
+	return sp.View()
+}
+
 // isPaste reports whether a key event carries clipboard text: a bracketed
 // paste from the terminal, or ctrl+v, which bubbles' text inputs answer with
 // a clipboard read. Bracketed pastes stringify as "[text]", so they never
