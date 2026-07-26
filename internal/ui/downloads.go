@@ -996,7 +996,7 @@ func fileMarkerText(f db.File, fetching bool, frac float64) string {
 	case f.Status == db.FileSkipped:
 		return "✓"
 	case frac > 0 && f.Status != db.FileError:
-		return "◐"
+		return "◔"
 	case !f.Wanted:
 		return "○"
 	case f.Status == db.FileError:

@@ -79,8 +79,8 @@ func TestFileMarkerShowsPartialProgress(t *testing.T) {
 		want     string
 	}{
 		{name: "unwanted no partial", file: db.File{Status: db.FilePending}, wantText: "○", want: styleDim.Render("○")},
-		{name: "unwanted partial", file: db.File{Status: db.FilePending}, frac: 0.3, wantText: "◐", want: stylePartial.Render("◐")},
-		{name: "wanted partial", file: db.File{Wanted: true, Status: db.FilePending}, frac: 0.3, wantText: "◐", want: stylePartial.Render("◐")},
+		{name: "unwanted partial", file: db.File{Status: db.FilePending}, frac: 0.3, wantText: "◔", want: stylePartial.Render("◔")},
+		{name: "wanted partial", file: db.File{Wanted: true, Status: db.FilePending}, frac: 0.3, wantText: "◔", want: stylePartial.Render("◔")},
 		{name: "wanted no partial", file: db.File{Wanted: true, Status: db.FilePending}, wantText: "·", want: styleDim.Render("·")},
 		{name: "error keeps cross despite partial", file: db.File{Wanted: true, Status: db.FileError}, frac: 0.3, wantText: "✗", want: styleError.Render("✗")},
 		{name: "fetching keeps arrow", file: db.File{Wanted: true, Status: db.FilePending}, fetching: true, frac: 0.3, wantText: "↓", want: styleDownload.Render("↓")},
