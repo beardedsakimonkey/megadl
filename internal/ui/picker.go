@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"megadl/internal/mega"
 )
 
@@ -169,6 +171,10 @@ func (p *pickerModel) view(width, height int) string {
 	visible := max(3, height)
 	endRow := min(len(p.rows), p.offset+visible)
 
+	// The cursor's band spans the widest visible row rather than the whole
+	// modal, so the modal keeps sizing itself to its content.
+	lines := make([]string, 0, endRow-p.offset)
+	bandW := 0
 	for i := p.offset; i < endRow; i++ {
 		row := p.rows[i]
 		var box string
@@ -191,17 +197,19 @@ func (p *pickerModel) view(width, height int) string {
 		if row.node.IsDir() {
 			name += "/"
 		}
-		line := fmt.Sprintf("%s%s %s", strings.Repeat("  ", row.depth), box,
-			truncate(name, max(10, width-20-2*row.depth)))
-		size := ""
+		line := fmt.Sprintf("%s%s%s %s", cursorBar(i == p.cursor, true),
+			strings.Repeat("  ", row.depth), box,
+			truncate(name, max(10, width-22-2*row.depth)))
 		if !row.node.IsDir() {
-			size = "  " + humanBytes(row.node.Size)
+			line += styleDim.Render("  " + humanBytes(row.node.Size))
 		}
-		if i == p.cursor {
-			// plain text so the highlight spans the whole row
-			line = styleSelected.Render(line + size)
-		} else if size != "" {
-			line += styleDim.Render(size)
+		bandW = max(bandW, lipgloss.Width(line))
+		lines = append(lines, line)
+	}
+
+	for i, line := range lines {
+		if p.offset+i == p.cursor {
+			line = tintRow(line, bandW)
 		}
 		b.WriteString(line + "\n")
 	}

@@ -15,12 +15,12 @@ const (
 )
 
 var (
-	// styleSelected marks the cursor row in the focused pane; styleSelBlur
-	// the remembered cursor row in an unfocused pane.
-	styleSelected = lipgloss.NewStyle().Background(colorPrimary).
-			Foreground(lipgloss.Color("255")).Bold(true)
-	styleSelBlur = lipgloss.NewStyle().Background(lipgloss.Color("238")).
-			Foreground(lipgloss.Color("255"))
+	// styleCursor draws the gutter bar on the cursor row of the focused pane,
+	// and styleRowTint the faint band behind that row. Between them they mark
+	// the cursor without setting a foreground: a bright full-row highlight
+	// would flatten the very row being read.
+	styleCursor  = lipgloss.NewStyle().Foreground(colorPrimaryText)
+	styleRowTint = lipgloss.NewStyle().Background(lipgloss.Color("236"))
 
 	styleDim         = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	styleError       = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
@@ -41,6 +41,50 @@ var (
 	styleModal = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorPrimary).Padding(1, 2)
 )
+
+// cursorBar is the two-cell left gutter that marks the cursor row: an accent
+// bar in the focused pane, dim for the remembered row of an unfocused one,
+// blank elsewhere. Its width is constant so rows never shift.
+func cursorBar(selected, focused bool) string {
+	if !selected {
+		return "  "
+	}
+	if focused {
+		return styleCursor.Render("▌") + " "
+	}
+	return styleDim.Render("▌") + " "
+}
+
+// tintRow lays styleRowTint's background under a line that is already styled,
+// padded out to width. Each nested style ends in a reset that would drop the
+// background too, so the background is re-armed after every one of them —
+// that is what lets the cursor row keep its own foreground colors instead of
+// being rendered as flat text the way a wrapping style would force.
+func tintRow(line string, width int) string {
+	if pad := width - lipgloss.Width(line); pad > 0 {
+		line += strings.Repeat(" ", pad)
+	}
+	// Ask the active profile for the sequences rather than writing them out,
+	// so the row stays plain when color is off (tests, piped output).
+	const probe = "\x00"
+	open, reset, ok := strings.Cut(styleRowTint.Render(probe), probe)
+	if !ok || open == "" {
+		return line
+	}
+	return armBackground(line, open, reset)
+}
+
+// armBackground wraps line in open/reset and re-opens after every reset the
+// line already carries, so nested foreground styles don't punch holes in the
+// background.
+func armBackground(line, open, reset string) string {
+	line = strings.ReplaceAll(line, reset, reset+open)
+	line = strings.TrimSuffix(line, open) // nothing follows the last reset
+	if !strings.HasSuffix(line, reset) {
+		line += reset
+	}
+	return open + line
+}
 
 func humanBytes(n int64) string {
 	return formatBytes(n, 1)

@@ -737,10 +737,6 @@ func (m *downloadsModel) listView(width, height int) string {
 
 func (m *downloadsModel) rowView(dl *db.Download, snap engine.Snapshot, selected bool, width int) string {
 	active := dl.ID == snap.ActiveID
-	marker := "  "
-	if selected {
-		marker = "▸ "
-	}
 	extra := ""
 	if active && snap.Rate > 0 {
 		extra = "  " + humanRate(snap.Rate)
@@ -750,19 +746,13 @@ func (m *downloadsModel) rowView(dl *db.Download, snap engine.Snapshot, selected
 	nameW := max(8, width-2-1-1-lipgloss.Width(extra)-2)
 	name := truncate(dl.Name, nameW)
 
-	if selected {
-		// plain text end to end so the highlight spans the whole row
-		line := fmt.Sprintf("%s%s %s%s", marker, statusIconText(dl.Status, active, partial, spin), name, extra)
-		style := styleSelBlur
-		if m.pane == paneList {
-			style = styleSelected
-		}
-		return style.Width(width).MaxWidth(width).Render(line)
-	}
-
-	line := fmt.Sprintf("%s%s %s", marker, statusIcon(dl.Status, active, partial, spin), name)
+	line := fmt.Sprintf("%s%s %s", cursorBar(selected, m.pane == paneList),
+		statusIcon(dl.Status, active, partial, spin), name)
 	if extra != "" {
 		line += styleOK.Render(extra)
+	}
+	if selected {
+		return tintRow(line, width)
 	}
 	return line
 }
@@ -857,8 +847,8 @@ func (m *downloadsModel) filesView(width, height int) string {
 	for i := m.fileScroll; i < min(len(rows), m.fileScroll+rowH); i++ {
 		r := rows[i]
 		if r.dir != "" {
-			indent := strings.Repeat("  ", r.depth)
-			lines = append(lines, indent+styleDim.Render(truncate(r.dir+"/", max(1, width-2-2*r.depth))))
+			indent := cursorBar(false, false) + strings.Repeat("  ", r.depth)
+			lines = append(lines, indent+styleDim.Render(truncate(r.dir+"/", max(1, width-4-2*r.depth))))
 			continue
 		}
 		lines = append(lines, m.fileRowView(m.files[r.file], dl, snap, r.file == m.fileCursor, r.depth, width, sizeW))
@@ -923,7 +913,8 @@ func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Sna
 	fetching := isFetching(f, dl, snap)
 
 	indent := strings.Repeat("  ", depth)
-	contentW := max(0, width-2-len(indent)) // the gutter is added by filesView
+	// the pane gutter (added by filesView) and the cursor column take 2 cells each
+	contentW := max(0, width-4-len(indent))
 
 	// marker(2) name progress(gap + bar + gap + percent) gap(2) size.
 	// In narrow panes the bar gives way to the name; the bar and percentage
@@ -954,20 +945,18 @@ func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Sna
 	padW := contentW - 2 - nameW - progressW - 2 - sizeW
 	padding := strings.Repeat(" ", max(0, padW))
 
-	if selected && m.pane == paneFiles {
-		bar := ""
-		if barW > 0 {
-			filled := int(frac * float64(barW))
-			bar = "  " + strings.Repeat("━", filled) + strings.Repeat("─", barW-filled) + " " + percent
-		}
-		return styleSelected.Render(indent + fileMarkerText(f, fetching, frac, m.app.spinFrame()) + " " + name + bar + "  " + size + padding)
-	}
-
 	bar := ""
 	if barW > 0 {
 		bar = "  " + fileProgressBar(barW, frac) + " " + styleDim.Render(percent)
 	}
-	return indent + fileMarker(f, fetching, frac, m.app.spinFrame()) + " " + name + bar + "  " + styleDim.Render(size) + padding
+	line := cursorBar(selected, m.pane == paneFiles) + indent +
+		fileMarker(f, fetching, frac, m.app.spinFrame()) + " " + name + bar + "  " +
+		styleDim.Render(size) + padding
+	if selected {
+		// width less the pane gutter filesView prepends
+		return tintRow(line, width-2)
+	}
+	return line
 }
 
 func fileProgress(f db.File, snap engine.Snapshot, fetching bool, partial int64) float64 {

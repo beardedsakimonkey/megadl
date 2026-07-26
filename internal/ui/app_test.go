@@ -31,11 +31,22 @@ func TestPrimaryStylesUseMegaRed(t *testing.T) {
 	if got := styleLogo.GetForeground(); got != colorPrimaryText {
 		t.Fatalf("logo foreground = %v, want %v", got, colorPrimaryText)
 	}
-	if got := styleSelected.GetBackground(); got != colorPrimary {
-		t.Fatalf("selected background = %v, want %v", got, colorPrimary)
+	if got := styleCursor.GetForeground(); got != colorPrimaryText {
+		t.Fatalf("cursor bar foreground = %v, want %v", got, colorPrimaryText)
 	}
 	if got := styleModal.GetBorderTopForeground(); got != colorPrimary {
 		t.Fatalf("modal border = %v, want %v", got, colorPrimary)
+	}
+}
+
+// The cursor row's tint has to survive the resets that the row's own
+// foreground styles emit, or the band ends at the first colored segment.
+func TestArmBackgroundReopensAfterNestedResets(t *testing.T) {
+	const open, reset = "<bg>", "<r>"
+	got := armBackground("  "+"<fg>✓"+reset+" name"+reset, open, reset)
+	want := open + "  <fg>✓" + reset + open + " name" + reset
+	if got != want {
+		t.Fatalf("armBackground() = %q, want %q", got, want)
 	}
 }
 
