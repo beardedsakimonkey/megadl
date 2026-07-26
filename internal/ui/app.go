@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -44,6 +45,9 @@ type App struct {
 	// after the engine goes idle so the strip holds its final frame instead
 	// of vanishing the moment a download stops or finishes.
 	lastBar engine.Snapshot
+	// savedBarFile is the file id last written to the database, so repeated
+	// progress events on the same file don't rewrite it.
+	savedBarFile int64
 
 	quota6h int64
 
@@ -63,6 +67,7 @@ func NewApp(cfg *config.Config, database *db.DB, eng *engine.Engine, drv mega.Dr
 func (a *App) Init() tea.Cmd {
 	a.refreshQuota()
 	a.downloads.restore()
+	a.restoreBar()
 	return tea.Batch(a.waitEngine(), tickCmd(), a.spinCmd())
 }
 
@@ -130,6 +135,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case engineMsg:
 		a.refreshQuota()
 		a.downloads.reload()
+		a.rememberBar(a.eng.Snapshot())
 		return a, tea.Batch(a.waitEngine(), a.spinCmd())
 
 	case tickMsg:
@@ -305,6 +311,50 @@ func (a *App) statusbarView() string {
 	// the row's own marker, so the strip and the list agree on how it went
 	marker := dlMarker(a.downloads.dlMarkerStateOf(row, snap), "")
 	return statusbarLine(held, marker, a.width)
+}
+
+// rememberBar records which file the strip is drawing, so the next session
+// starts with it rather than an empty footer. Only the file is remembered:
+// how far it got is read back off its row and its partial, so a restored strip
+// cannot describe a transfer that is no longer there. Writes that would change
+// nothing are skipped, so progress events don't hit the database.
+func (a *App) rememberBar(snap engine.Snapshot) {
+	if snap.ActiveID == 0 || snap.CurrentPath == "" {
+		return
+	}
+	f, err := a.db.FileByLocalPath(snap.ActiveID, snap.CurrentPath)
+	if err != nil || f == nil || f.ID == a.savedBarFile {
+		return
+	}
+	a.savedBarFile = f.ID
+	a.db.SetStatusbarFile(f.ID)
+}
+
+// restoreBar puts the last session's strip back, rebuilt from the file row and
+// what is on disk: a file that landed reads as complete, one that stopped
+// partway sits at its partial. A file the database no longer knows about — its
+// download removed since — simply leaves the footer as it was.
+func (a *App) restoreBar() {
+	id, err := a.db.StatusbarFile()
+	if err != nil || id == 0 {
+		return
+	}
+	f, err := a.db.File(id)
+	if err != nil || f == nil {
+		return
+	}
+	done := f.Size
+	if f.Status != db.FileDone && f.Status != db.FileSkipped {
+		done = partialSizes([]db.File{*f})[f.ID]
+	}
+	a.savedBarFile = f.ID
+	a.lastBar = engine.Snapshot{
+		ActiveID:    f.DownloadID,
+		CurrentFile: filepath.Base(f.LocalPath),
+		CurrentPath: f.LocalPath,
+		FileSize:    f.Size,
+		FileDone:    done,
+	}
 }
 
 func (a *App) downloadRow(id int64) *db.Download {

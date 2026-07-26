@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -212,6 +214,138 @@ func TestStatusbarDropsHeldTransferWhenItsDownloadIsRemoved(t *testing.T) {
 	}
 	if app.lastBar.CurrentFile != "" {
 		t.Fatalf("held snapshot = %+v, want cleared", app.lastBar)
+	}
+}
+
+// barSessionApp is an app over a real database holding one download of a
+// single file, as a previous session would have left it: the strip it drew
+// last is recorded, and the file is in the given state.
+func barSessionApp(t *testing.T, status string, partial int64) (*App, *db.DB, db.File) {
+	t.Helper()
+	app, database := openAddlinkTestApp(t)
+	app.width = 100
+
+	dest := filepath.Join(app.cfg.DownloadDir, "Skins")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id, err := database.InsertDownload(&db.Download{
+		URL: "u", Handle: "h", LinkType: "folder", Name: "Skins", DestPath: dest,
+	}, []db.File{{
+		NodeHandle: "h1",
+		RemotePath: "/Skins/episode-01.mkv",
+		LocalPath:  filepath.Join(dest, "episode-01.mkv"),
+		Size:       100,
+		Queued:     true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != db.FilePending {
+		if err := database.SetFileStatusByHandle(id, "h1", status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if status == db.FileDone {
+		if err := database.MarkCompleted(id, db.StatusDone); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if partial > 0 {
+		tmp := filepath.Join(dest, ".megatmp.h1")
+		if err := os.WriteFile(tmp, make([]byte, partial), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := database.Files(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetStatusbarFile(files[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	app.downloads.reload()
+	return app, database, files[0]
+}
+
+// Quitting must not empty the footer: the next session opens on the same
+// transfer, drawn from the file row rather than from anything it stored.
+func TestStatusbarRestoresLastSessionsFinishedTransfer(t *testing.T) {
+	app, _, _ := barSessionApp(t, db.FileDone, 0)
+
+	app.restoreBar()
+
+	got := ansi.Strip(app.statusbarView())
+	for _, want := range []string{"✓ episode-01.mkv", "100%", "100 / 100 B"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("restored statusbar = %q, want %q", got, want)
+		}
+	}
+}
+
+// A transfer that was interrupted comes back where the partial on disk says it
+// stopped, not where the last frame happened to be drawn.
+func TestStatusbarRestoresUnfinishedTransferFromPartial(t *testing.T) {
+	app, _, _ := barSessionApp(t, db.FilePending, 40)
+
+	app.restoreBar()
+
+	got := ansi.Strip(app.statusbarView())
+	for _, want := range []string{"episode-01.mkv", "40%", "40 / 100 B"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("restored statusbar = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestStatusbarRestoreSkipsRemovedDownload(t *testing.T) {
+	app, database, file := barSessionApp(t, db.FileDone, 0)
+	if err := database.DeleteDownload(file.DownloadID); err != nil {
+		t.Fatal(err)
+	}
+	app.downloads.reload()
+
+	app.restoreBar()
+
+	if app.lastBar.CurrentFile != "" {
+		t.Fatalf("restored snapshot = %+v, want nothing to draw", app.lastBar)
+	}
+	if got := app.statusbarView(); got != "" {
+		t.Fatalf("statusbar = %q, want empty", got)
+	}
+}
+
+// The strip is recorded as the engine reports files, so a session that is
+// killed still leaves the last transfer behind. The same file reported again
+// must not rewrite the row.
+func TestStatusbarRecordsFileAsItIsFetched(t *testing.T) {
+	app, database, file := barSessionApp(t, db.FilePending, 0)
+	if err := database.SetStatusbarFile(0); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := engine.Snapshot{
+		ActiveID:    file.DownloadID,
+		CurrentFile: "episode-01.mkv",
+		CurrentPath: file.LocalPath,
+		FileSize:    100,
+		FileDone:    10,
+	}
+	app.rememberBar(snap)
+
+	got, err := database.StatusbarFile()
+	if err != nil || got != file.ID {
+		t.Fatalf("recorded statusbar file = %d, %v, want %d", got, err, file.ID)
+	}
+
+	// a second event on the same file is not another write
+	if err := database.SetStatusbarFile(0); err != nil {
+		t.Fatal(err)
+	}
+	snap.FileDone = 20
+	app.rememberBar(snap)
+	if got, err := database.StatusbarFile(); err != nil || got != 0 {
+		t.Fatalf("recorded statusbar file = %d, %v, want the write skipped", got, err)
 	}
 }
 
