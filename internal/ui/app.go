@@ -252,7 +252,7 @@ func (a *App) View() string {
 }
 
 func (a *App) headerView() string {
-	title := styleLogoMark.Render(" ◢◣◥◤◢◣ ") +
+	title := styleLogoMark.Render(" ◣◥◤◢ ") +
 		stylePrimaryText.Bold(true).Render("ＭＥＧＡ") +
 		styleHelpKey.Bold(true).Render("ＤＬ™")
 	quota := styleDim.Render("↓ ") +
