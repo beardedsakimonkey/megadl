@@ -437,6 +437,10 @@ func (d *DB) rebaseDownload(id int64, name, oldDestPath, newDestPath string) err
 		}
 		files = append(files, file)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
 	if err := rows.Close(); err != nil {
 		return err
 	}

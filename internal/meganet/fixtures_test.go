@@ -263,7 +263,7 @@ func (m *fakeMega) validHashcash(hdr string) bool {
 		copy(buf[4+i*48:], token)
 	}
 	sum := sha256.Sum256(buf)
-	threshold := (uint32(hashcashEasiness&63)<<1 + 1) << ((uint32(hashcashEasiness) >> 6) * 7 + 3)
+	threshold := (uint32(hashcashEasiness&63)<<1 + 1) << ((uint32(hashcashEasiness)>>6)*7 + 3)
 	return binary.BigEndian.Uint32(sum[:4]) <= threshold
 }
 

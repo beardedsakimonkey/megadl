@@ -211,7 +211,8 @@ func (p *pickerModel) view(width, height int) string {
 		if p.offset+i == p.cursor {
 			line = tintRow(line, bandW)
 		}
-		b.WriteString(line + "\n")
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
 
 	count, bytes := p.totals()

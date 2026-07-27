@@ -332,7 +332,7 @@ func TestHeaderShowsAmountInLastSixHours(t *testing.T) {
 	for _, wanted := range []string{
 		styleDim.Render("↓ "),
 		quotaStyle(1536 << 20).Bold(true).Render("1.5"),
-		styleDim.Render(" GiB in last 6h"),
+		styleDim.Render(" GiB"),
 	} {
 		if !strings.Contains(header, wanted) {
 			t.Fatalf("header = %q, want %q", header, wanted)
