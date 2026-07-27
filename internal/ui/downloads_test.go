@@ -631,6 +631,91 @@ func TestEnterWithNothingOnDiskShowsNotice(t *testing.T) {
 	}
 }
 
+func TestEnterOnListRowPlaysWholeFolder(t *testing.T) {
+	dir := t.TempDir()
+	files := []db.File{
+		{LocalPath: filepath.Join(dir, "cover.jpg"), Status: db.FileDone, Queued: true},
+		{LocalPath: filepath.Join(dir, "e1.mkv"), Status: db.FileDone, Queued: true},
+		{LocalPath: filepath.Join(dir, "e2.mkv"), Status: db.FileDone, Queued: true},
+	}
+	for _, f := range files {
+		if err := os.WriteFile(f.LocalPath, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, opened := playerModel(t, files)
+	m.pane = paneList
+	m.fileCursor = 2 // the folder plays from its start, not from here
+
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on a list row returned no command")
+	}
+	msg := cmd()
+	want := []string{filepath.Join(dir, "e1.mkv"), filepath.Join(dir, "e2.mkv")}
+	if !slices.Equal(*opened, want) {
+		t.Fatalf("opened files = %v, want %v", *opened, want)
+	}
+	m.update(msg)
+	if !strings.Contains(m.notice, "playing e1.mkv (+1 queued)") {
+		t.Fatalf("notice = %q, want folder playing confirmation", m.notice)
+	}
+}
+
+func TestEnterOnListRowStartsAtPartialWhenNothingIsComplete(t *testing.T) {
+	dir := t.TempDir()
+	partial := filepath.Join(dir, ".megatmp.h1")
+	if err := os.WriteFile(partial, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := []db.File{{
+		ID: 7, NodeHandle: "h1", LocalPath: filepath.Join(dir, "e1.mkv"),
+		Status: db.FilePending, Queued: true,
+	}}
+	m, opened := playerModel(t, files)
+	m.pane = paneList
+	m.partials = partialSizes(files)
+
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on a list row returned no command")
+	}
+	cmd()
+	if len(*opened) != 1 || (*opened)[0] != partial {
+		t.Fatalf("opened files = %v, want the partial %q", *opened, partial)
+	}
+}
+
+func TestEnterOnListRowWithNothingOnDiskNotices(t *testing.T) {
+	dir := t.TempDir()
+	m, opened := playerModel(t, []db.File{
+		{NodeHandle: "h1", LocalPath: filepath.Join(dir, "e1.mkv"), Status: db.FilePending, Queued: true},
+	})
+	m.pane = paneList
+
+	if cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatalf("enter returned a command with nothing playable: %v", cmd())
+	}
+	if len(*opened) != 0 {
+		t.Fatalf("opened files = %v, want none", *opened)
+	}
+	if !strings.Contains(m.notice, "nothing to play") {
+		t.Fatalf("notice = %q, want nothing-to-play notice", m.notice)
+	}
+}
+
+func TestListPaneLKeyMovesToFiles(t *testing.T) {
+	m, _ := playerModel(t, []db.File{
+		{LocalPath: filepath.Join(t.TempDir(), "e1.mkv"), Status: db.FileDone, Queued: true},
+	})
+	m.pane = paneList
+
+	pressKey(m, "l")
+	if m.pane != paneFiles {
+		t.Fatal("l did not move focus to the files pane")
+	}
+}
+
 func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "e1.mkv")

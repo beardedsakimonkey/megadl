@@ -384,7 +384,9 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 			m.cursor++
 			m.loadFiles()
 		}
-	case "enter", "right", "l":
+	case "enter":
+		return m.openSelectedDownload()
+	case "right", "l":
 		if len(m.files) > 0 {
 			m.pane = paneFiles
 		}
@@ -534,7 +536,7 @@ func (m *downloadsModel) mouse(msg tea.MouseMsg) tea.Cmd {
 }
 
 // clickDownload selects the download on body row y; clicking the selected
-// row again moves focus to its files, the way enter does.
+// row again moves focus to its files, the way l does.
 func (m *downloadsModel) clickDownload(y int) {
 	i := m.scroll + y
 	if i >= len(m.rows) {
@@ -636,10 +638,33 @@ func (m *downloadsModel) refreshListing() tea.Cmd {
 // in the same directory are queued behind it so a folder of episodes keeps
 // playing; see playlistTail.
 func (m *downloadsModel) openSelectedFile() tea.Cmd {
-	if m.fileCursor >= len(m.files) {
+	return m.playFrom(m.fileCursor)
+}
+
+// openSelectedDownload plays the whole selected download: playback starts at
+// its first playable file and the rest of that file's folder is queued behind
+// it, so enter on a list row plays a folder without picking a file first.
+func (m *downloadsModel) openSelectedDownload() tea.Cmd {
+	for i, f := range m.files {
+		if !isMediaFile(f.LocalPath) {
+			continue
+		}
+		// a partial is playable too: it holds plaintext from byte zero
+		if f.Status == db.FileDone || f.Status == db.FileSkipped || m.partials[f.ID] > 0 {
+			return m.playFrom(i)
+		}
+	}
+	m.notice = "nothing to play is on disk yet"
+	return nil
+}
+
+// playFrom plays files[i], with the media files after it queued behind; see
+// playlistTail.
+func (m *downloadsModel) playFrom(i int) tea.Cmd {
+	if i < 0 || i >= len(m.files) {
 		return nil
 	}
-	f := m.files[m.fileCursor]
+	f := m.files[i]
 	open := m.openFile
 	if open == nil {
 		open = openInMPV
@@ -650,7 +675,7 @@ func (m *downloadsModel) openSelectedFile() tea.Cmd {
 		path = filepath.Join(filepath.Dir(f.LocalPath), ".megatmp."+f.NodeHandle)
 		name += " (partial)"
 	}
-	queued := playlistTail(m.files, m.fileCursor)
+	queued := playlistTail(m.files, i)
 	return func() tea.Msg {
 		if _, err := os.Stat(path); err != nil {
 			return fileOpenedMsg{err: errors.New(name + " is not on disk yet")}
@@ -768,7 +793,8 @@ func (m *downloadsModel) help() string {
 	}
 	return renderShortcuts(
 		shortcut{keys: []string{"a"}, label: "add"},
-		shortcut{keys: []string{"⏎"}, label: "files"},
+		shortcut{keys: []string{"⏎"}, label: "play"},
+		shortcut{keys: []string{"l"}, label: "files"},
 		shortcut{keys: []string{"s"}, label: m.toggleLabel()},
 		shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
 		shortcut{keys: []string{"r"}, label: "rename"},
