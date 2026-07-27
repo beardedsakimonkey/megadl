@@ -1006,8 +1006,10 @@ func (m *downloadsModel) view(width, height int) string {
 		return styleDim.Render("\n  no downloads yet — press 'a' to add a mega.nz link")
 	}
 
+	// An absent detail block costs nothing: lipgloss.Height("") is 1, so the
+	// subtraction only belongs in the branch that actually draws one.
 	detail := m.detailView(width)
-	paneHeight := height - lipgloss.Height(detail)
+	paneHeight := height
 	if detail != "" {
 		paneHeight = height - lipgloss.Height(detail) - 1 // blank separator
 	}

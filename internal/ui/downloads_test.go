@@ -1626,3 +1626,23 @@ func TestPercentTextNeverReadsCompleteBeforeTheBarFills(t *testing.T) {
 		t.Fatalf("progressBar(20, 1) = %q, want it full", bar)
 	}
 }
+
+// With no detail block to make room for, the panes get every row the body was
+// given. lipgloss.Height("") is 1, so subtracting it unconditionally used to
+// leave a blank line above the footer that looked like an empty statusbar.
+func TestPanesUseTheWholeBodyWithoutADetailBlock(t *testing.T) {
+	app, database, files := queueBarApp(t, 40)
+	if err := database.SetDownloadQueued(files[0].DownloadID, false); err != nil {
+		t.Fatal(err)
+	}
+	app.downloads.reload()
+
+	const height = 12
+	if detail := app.downloads.detailView(app.width); detail != "" {
+		t.Fatalf("detailView = %q, want empty", detail)
+	}
+	app.downloads.view(app.width, height)
+	if app.downloads.paneHeight != height {
+		t.Fatalf("paneHeight = %d, want %d", app.downloads.paneHeight, height)
+	}
+}
