@@ -276,6 +276,22 @@ func TestAddlinkColorsBase64InputOrange(t *testing.T) {
 	}
 }
 
+func TestAddlinkClearsInvalidLinkErrorWhenInputChanges(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	m := newAddlinkModel(app)
+	m.urlInput.SetValue("invalid")
+
+	m.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.errMsg == "" {
+		t.Fatal("expected invalid link error after submit")
+	}
+
+	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" link")})
+	if m.errMsg != "" {
+		t.Fatalf("error after typing = %q, want empty", m.errMsg)
+	}
+}
+
 func TestAddlinkDecodeAnimationKeepsDialogWidthStable(t *testing.T) {
 	app, _ := openAddlinkTestApp(t)
 	link := "https://mega.nz/file/DDDDDDDD#0123456789abcdefghijkl"

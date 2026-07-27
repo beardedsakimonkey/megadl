@@ -384,8 +384,12 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 		case "enter":
 			return m.submitURL(strings.TrimSpace(m.urlInput.Value()))
 		}
+		before := m.urlInput.Value()
 		var cmd tea.Cmd
 		m.urlInput, cmd = m.urlInput.Update(key)
+		if m.urlInput.Value() != before {
+			m.errMsg = ""
+		}
 		m.refreshLinkHint()
 		return m, cmd
 
