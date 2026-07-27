@@ -236,7 +236,7 @@ func fileProgressBar(width int, frac float64) string {
 	}
 	frac = min(1, max(0, frac))
 	filled := int(frac * float64(width))
-	return styleProgress.Render(strings.Repeat("━", filled)) +
+	return styleProgress.Render(strings.Repeat("─", filled)) +
 		styleDim.Render(strings.Repeat("─", width-filled))
 }
 

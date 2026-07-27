@@ -31,7 +31,7 @@ func TestProgressBarUsesGreenProgressStyle(t *testing.T) {
 
 func TestFileProgressBarUsesCenteredGlyphs(t *testing.T) {
 	got := fileProgressBar(4, 0.5)
-	want := styleProgress.Render("━━") + styleDim.Render("──")
+	want := styleProgress.Render("──") + styleDim.Render("──")
 	if got != want {
 		t.Fatalf("fileProgressBar() = %q, want %q", got, want)
 	}
@@ -265,9 +265,9 @@ func TestFileRowShowsProgressBarColumn(t *testing.T) {
 		{"undownloaded", db.File{ID: 1, LocalPath: "/dl/e1.mkv", Size: 100, Status: db.FilePending, Queued: true},
 			strings.Repeat("─", 10), "  0%"},
 		{"half fetched", db.File{ID: 2, LocalPath: "/dl/e2.mkv", Size: 100, Status: db.FilePending, Queued: true},
-			strings.Repeat("━", 5) + strings.Repeat("─", 5), " 50%"},
+			strings.Repeat("─", 10), " 50%"},
 		{"done", db.File{ID: 3, LocalPath: "/dl/e3.mkv", Size: 100, Status: db.FileDone, Queued: true},
-			strings.Repeat("━", 10), "100%"},
+			strings.Repeat("─", 10), "100%"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -285,7 +285,7 @@ func TestFileRowKeepsBarWhenSelected(t *testing.T) {
 	f := db.File{ID: 2, LocalPath: "/dl/e2.mkv", Size: 100, Status: db.FilePending, Queued: true}
 
 	got := ansi.Strip(m.fileRowView(f, &db.Download{ID: 7}, engine.Snapshot{}, 0, true, 0, 60, 5))
-	if !strings.Contains(got, strings.Repeat("━", 5)+strings.Repeat("─", 5)+"  50%") {
+	if !strings.Contains(got, strings.Repeat("─", 10)+"  50%") {
 		t.Fatalf("selected file row lost its bar: %q", got)
 	}
 }
@@ -295,7 +295,7 @@ func TestFileRowHidesProgressBarAndPercentageTogether(t *testing.T) {
 	f := db.File{ID: 2, LocalPath: "/dl/episode.mkv", Size: 100, Status: db.FilePending, Queued: true}
 
 	got := ansi.Strip(m.fileRowView(f, &db.Download{ID: 7}, engine.Snapshot{}, 0, false, 0, 25, 5))
-	if strings.ContainsAny(got, "━─%") {
+	if strings.ContainsAny(got, "─%") {
 		t.Fatalf("narrow file row retained part of its progress display: %q", got)
 	}
 }
@@ -465,7 +465,7 @@ func TestFilesViewShowsPartialProgressWhenIdle(t *testing.T) {
 			fileRow = l
 		}
 	}
-	if !strings.Contains(ansi.Strip(fileRow), strings.Repeat("━", 5)+strings.Repeat("─", 5)+"  50%") {
+	if !strings.Contains(ansi.Strip(fileRow), strings.Repeat("─", 10)+"  50%") {
 		t.Fatalf("file row is missing its half-filled bar: %q", fileRow)
 	}
 }
