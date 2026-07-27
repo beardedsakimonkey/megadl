@@ -234,8 +234,9 @@ func (a *App) headerView() string {
 	title := styleLogoMark.Render("◢◣◥◤◢◣ ") +
 		stylePrimaryText.Bold(true).Render("ＭＥＧＡ") +
 		styleHelpKey.Bold(true).Render("ＤＬ")
+	quotaGiB := strings.TrimSuffix(fmt.Sprintf("%.1f", float64(a.quota6h)/(1<<30)), ".0")
 	quota := styleDim.Render("↓ ") +
-		quotaStyle(a.quota6h).Bold(true).Render(fmt.Sprintf("%.1f", float64(a.quota6h)/(1<<30))) +
+		quotaStyle(a.quota6h).Bold(true).Render(quotaGiB) +
 		styleDim.Render(" GiB")
 	gap := a.width - lipgloss.Width(title) - lipgloss.Width(quota) - 1
 	if gap < 1 {

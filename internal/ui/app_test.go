@@ -338,4 +338,10 @@ func TestHeaderShowsAmountInLastSixHours(t *testing.T) {
 			t.Fatalf("header = %q, want %q", header, wanted)
 		}
 	}
+
+	app.quota6h = 0
+	header = app.headerView()
+	if strings.Contains(header, "0.0") {
+		t.Fatalf("header = %q, should render a whole quota without a decimal", header)
+	}
 }
