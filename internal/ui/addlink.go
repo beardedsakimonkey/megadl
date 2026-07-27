@@ -631,12 +631,12 @@ func (m *addlinkModel) help() string {
 	case stateURL:
 		return renderShortcuts(
 			shortcut{keys: []string{"↑/↓", "ctrl+p/n"}, label: "history"},
-			shortcut{keys: []string{"enter"}, label: "list link"},
+			shortcut{keys: []string{"enter"}, label: "submit"},
 			shortcut{keys: []string{"esc"}, label: "cancel"},
 		)
 	case stateDecoding:
 		return renderShortcuts(
-			shortcut{keys: []string{"enter"}, label: "list link"},
+			shortcut{keys: []string{"enter"}, label: "submit"},
 			shortcut{keys: []string{"esc"}, label: "skip"},
 		)
 	case stateListing:
