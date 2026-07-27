@@ -237,8 +237,10 @@ func TestStatusbarEmptyWhenNothingIsQueued(t *testing.T) {
 	if got := app.statusbarView(); got != "" {
 		t.Fatalf("statusbar = %q, want empty with an empty queue", got)
 	}
-	if got, want := app.footerView(), app.helpLine(); got != want {
-		t.Fatalf("footer = %q, want just the help line %q", got, want)
+	help := app.helpLine()
+	want := strings.Repeat(" ", max(0, (app.width-lipgloss.Width(help))/2)) + help
+	if got := app.footerView(); got != want {
+		t.Fatalf("footer = %q, want centered help line %q", got, want)
 	}
 }
 

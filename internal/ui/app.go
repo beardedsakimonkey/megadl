@@ -248,6 +248,9 @@ func (a *App) headerView() string {
 
 func (a *App) footerView() string {
 	line := a.helpLine()
+	if pad := (a.width - lipgloss.Width(line)) / 2; pad > 0 {
+		line = strings.Repeat(" ", pad) + line
+	}
 
 	if bar := a.statusbarView(); bar != "" {
 		return bar + "\n" + line
