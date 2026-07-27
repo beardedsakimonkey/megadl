@@ -40,21 +40,53 @@ var (
 			BorderForeground(colorPrimary).Padding(1, 2)
 )
 
-// quotaStyle grades the 6h transfer total from green to red in four steps.
-// MEGA's free-tier ceiling sits around 5 GiB, so the bands are quarters of
-// that and everything at or past it renders in the same red as an error.
+// quotaLimit is roughly what MEGA's free tier allows over the 6h window.
+const quotaLimit = 5 << 30
+
+// quotaStyle grades the 6h transfer total from green to red in four steps:
+// the bands are quarters of quotaLimit, and everything at or past it renders
+// in the same red as an error.
 func quotaStyle(bytes int64) lipgloss.Style {
-	const limit = 5 << 30
 	switch {
-	case bytes < limit/4:
+	case bytes < quotaLimit/4:
 		return styleOK
-	case bytes < limit/2:
+	case bytes < quotaLimit/2:
 		return stylePartial
-	case bytes < limit*3/4:
+	case bytes < quotaLimit*3/4:
 		return styleWarn
 	default:
 		return styleError
 	}
+}
+
+// sparkLevels are the bar heights a sparkline draws with, shortest first. All
+// of them stand for a transfer: an empty bucket draws no bar at all, so the
+// shortest one is free to mean "barely anything" rather than "nothing".
+const sparkLevels = "▁▂▃▄▅▆▇█"
+
+// sparkline renders one cell per bucket against a fixed ceiling, so a bar's
+// height always stands for the same number of bytes and the row can be read
+// without a scale printed beside it. Buckets at or past full fill the cell
+// rather than pulling the rest of the row down with them.
+//
+// Like the progress bars, idle cells use a dim "░" track glyph. Active cells
+// replace the track with the glyph for their transfer level.
+func sparkline(buckets []int64, full int64, style lipgloss.Style) string {
+	levels := []rune(sparkLevels)
+	var b strings.Builder
+	for _, v := range buckets {
+		if v <= 0 || full <= 0 {
+			b.WriteString(styleDim.Render("░"))
+			continue
+		}
+		// Positive buckets start at the shortest glyph. The remaining seven
+		// steps are spread evenly up to full, so the tallest glyph begins
+		// exactly at the ceiling rather than one interval before it.
+		level := 1 + int(float64(v)/float64(full)*float64(len(levels)-1))
+		level = min(level, len(levels))
+		b.WriteString(style.Render(string(levels[level-1])))
+	}
+	return b.String()
 }
 
 // cursorBar is the two-cell left gutter that marks the cursor row: an accent

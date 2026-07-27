@@ -440,6 +440,40 @@ func TestQuotaAccounting(t *testing.T) {
 	}
 }
 
+func TestTransferBucketsSliceTheWindowByTime(t *testing.T) {
+	d := openTest(t)
+
+	// An idle window still describes itself: one zero per slice.
+	got, err := d.TransferBuckets(6*time.Hour, 12)
+	if err != nil || !slices.Equal(got, make([]int64, 12)) {
+		t.Fatalf("idle window = %v, %v", got, err)
+	}
+
+	now := time.Now().Unix()
+	log := func(ago time.Duration, bytes int64) {
+		t.Helper()
+		if _, err := d.sql.Exec(`INSERT INTO transfer_log (ts, bytes) VALUES (?, ?)`,
+			now-int64(ago.Seconds()), bytes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log(0, 100) // exactly now: the slice still filling up
+	log(10*time.Second, 300)
+	log(20*time.Second, 200) // same slice, summed with the two above
+	log(65*time.Minute, 700) // three half-hour slices back
+	log(7*time.Hour, 9999)   // older than the window
+
+	got, err = d.TransferBuckets(6*time.Hour, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]int64, 12)
+	want[11], want[9] = 600, 700
+	if !slices.Equal(got, want) {
+		t.Fatalf("buckets = %v, want %v", got, want)
+	}
+}
+
 func TestFindByDestPath(t *testing.T) {
 	d := openTest(t)
 	d.InsertDownload(&Download{URL: "u1", Handle: "h", LinkType: "folder",

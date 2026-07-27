@@ -686,6 +686,34 @@ func (d *DB) BytesSince(t time.Time) (int64, error) {
 	return n.Int64, err
 }
 
+// TransferBuckets splits the last window into equal slices of time and sums
+// the bytes logged in each, oldest first. The series always ends at now, so
+// the final bucket is the slice still filling up.
+func (d *DB) TransferBuckets(window time.Duration, buckets int) ([]int64, error) {
+	if window <= 0 || buckets <= 0 {
+		return nil, nil
+	}
+	size := max(int64(window.Seconds())/int64(buckets), 1)
+	start := time.Now().Unix() - size*int64(buckets)
+	rows, err := d.sql.Query(`SELECT (ts - ?) / ?, SUM(bytes) FROM transfer_log
+		WHERE ts > ? GROUP BY 1`, start, size, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]int64, buckets)
+	for rows.Next() {
+		var idx, n int64
+		if err := rows.Scan(&idx, &n); err != nil {
+			return nil, err
+		}
+		// A row stamped exactly now divides out one past the end, as does one
+		// written before a clock jumped; both belong in the slice in progress.
+		out[min(max(idx, 0), int64(buckets-1))] += n
+	}
+	return out, rows.Err()
+}
+
 // DailyTotals returns per-local-day byte totals for the last `days` days.
 func (d *DB) DailyTotals(days int) (map[string]int64, error) {
 	rows, err := d.sql.Query(`SELECT date(ts, 'unixepoch', 'localtime') AS day, SUM(bytes)

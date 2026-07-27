@@ -345,3 +345,57 @@ func TestHeaderShowsAmountInLastSixHours(t *testing.T) {
 		t.Fatalf("header = %q, should render a whole quota without a decimal", header)
 	}
 }
+
+func TestSparklineMeasuresBarsAgainstAFixedCeiling(t *testing.T) {
+	const full = 5 << 30
+	got := sparkline([]int64{0, 1, full / 2, full - 1, full, 3 * full}, full, styleOK)
+	want := styleDim.Render("░") + styleOK.Render("▁") + styleOK.Render("▄") +
+		styleOK.Render("▇") + styleOK.Render("█") + styleOK.Render("█")
+	if got != want {
+		t.Fatalf("sparkline = %q, want %q", got, want)
+	}
+
+	// An idle window is the same dim track used by progress bars.
+	if got, want := sparkline([]int64{0, 0}, full, styleOK),
+		styleDim.Render("░░"); got != want {
+		t.Fatalf("idle sparkline = %q, want %q", got, want)
+	}
+}
+
+// Bars used to be scaled against each other, so the first few hundred MiB of a
+// download drew a full-height bar with nothing to compare it to.
+func TestSparklineKeepsAModestTransferLow(t *testing.T) {
+	got := sparkline([]int64{300 << 20}, sparkFull, styleOK)
+	if want := styleOK.Render("▁"); got != want {
+		t.Fatalf("0.3 GiB bar = %q, want %q", got, want)
+	}
+}
+
+func TestHeaderSparklineYieldsToTheTotalWhenNarrow(t *testing.T) {
+	app := &App{
+		width:   100,
+		quota6h: 1536 << 20,
+		spark:   []int64{0, 0, 1, 3, 8, 2},
+	}
+
+	row := styleDim.Render("6h") + "  " + sparkline(app.spark, sparkFull, quotaStyle(app.quota6h))
+	if header := app.headerView(); !strings.Contains(header, row) {
+		t.Fatalf("header = %q, want sparkline %q", header, row)
+	}
+
+	// Too narrow for both: the row goes, the number stays.
+	app.width = 40
+	header := app.headerView()
+	if strings.Contains(header, row) {
+		t.Fatalf("header = %q, sparkline should give way at width %d", header, app.width)
+	}
+	if !strings.Contains(header, styleDim.Render(" GiB")) {
+		t.Fatalf("header = %q, want the quota total kept", header)
+	}
+	// Every header line still fits the terminal.
+	for line := range strings.SplitSeq(header, "\n") {
+		if w := lipgloss.Width(line); w > app.width {
+			t.Fatalf("header line %q is %d cells wide, want <= %d", line, w, app.width)
+		}
+	}
+}

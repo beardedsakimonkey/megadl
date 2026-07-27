@@ -42,9 +42,29 @@ type App struct {
 	spinning bool // spinner tick loop in flight
 
 	quota6h int64
+	// spark holds quotaWindow's transfer totals bucketed over time, oldest
+	// first, for the header sparkline
+	spark []int64
 
 	fatal string
 }
+
+// The header describes one window of transfers two ways: quota6h is how many
+// bytes landed in it, and spark is when. sparkBuckets divides the window into
+// one bar per hour, which keeps the row narrow enough to sit in the header
+// beside the title.
+const (
+	quotaWindow      = 6 * time.Hour
+	quotaWindowLabel = "6h"
+	sparkBuckets     = 6
+	// sparkFull is the transfer a bar draws at full height. Bars are measured
+	// against it rather than against each other, so a bar's height means the
+	// same thing from one glance to the next: a busy hour reads as busy even
+	// when the rest of the window was idle, and the first few hundred MiB of a
+	// download don't fill the row. A single hour taking the whole window's
+	// approximate allowance is as steep as the row needs to go.
+	sparkFull = 5 << 30
+)
 
 func NewApp(cfg *config.Config, database *db.DB, eng *engine.Engine, drv mega.Driver) *App {
 	a := &App{cfg: cfg, db: database, eng: eng, drv: drv}
@@ -74,7 +94,8 @@ func tickCmd() tea.Cmd {
 }
 
 func (a *App) refreshQuota() {
-	a.quota6h, _ = a.db.BytesSince(time.Now().Add(-6 * time.Hour))
+	a.quota6h, _ = a.db.BytesSince(time.Now().Add(-quotaWindow))
+	a.spark, _ = a.db.TransferBuckets(quotaWindow, sparkBuckets)
 }
 
 // downloading reports whether the engine is fetching a file right now.
@@ -238,11 +259,16 @@ func (a *App) headerView() string {
 	quota := styleDim.Render("↓ ") +
 		quotaStyle(a.quota6h).Bold(true).Render(quotaGiB) +
 		styleDim.Render(" GiB")
-	gap := a.width - lipgloss.Width(title) - lipgloss.Width(quota) - 1
-	if gap < 1 {
-		gap = 1
+	// The sparkline joins the total whenever the header has room to keep them
+	// both clear of the title; on a narrow terminal the number is what matters.
+	right := quota
+	if spark := a.sparkView(); spark != "" {
+		if wide := spark + "  " + quota; a.width-lipgloss.Width(title)-lipgloss.Width(wide)-1 >= 2 {
+			right = wide
+		}
 	}
-	line := title + strings.Repeat(" ", gap) + quota
+	gap := max(1, a.width-lipgloss.Width(right)-lipgloss.Width(title)-1)
+	line := title + strings.Repeat(" ", gap) + right
 	ruleText := strings.Repeat("─", max(1, a.width))
 	listW, filesW := downloadPaneWidths(a.width, len(a.downloads.files) > 0)
 	if filesW > 0 {
@@ -251,6 +277,17 @@ func (a *App) headerView() string {
 	}
 	rule := styleDim.Render(ruleText)
 	return line + "\n" + rule
+}
+
+// sparkView draws the transfer window as one labelled row of bars, colored
+// with the total it sits beside. It is empty until the buckets have been read,
+// so a header rendered before the first refresh simply omits it.
+func (a *App) sparkView() string {
+	if len(a.spark) == 0 {
+		return ""
+	}
+	return styleDim.Render(quotaWindowLabel) + "  " +
+		sparkline(a.spark, sparkFull, quotaStyle(a.quota6h))
 }
 
 func (a *App) footerView() string {
