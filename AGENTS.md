@@ -38,6 +38,10 @@ MEGA protocol implementation (no external downloader).
 - List markers describe what is on disk and what the queue will do about it,
   never a status field, so they cannot go stale. Keep every glyph one cell
   wide or the name columns shift.
+- The file pane's cursor indexes tree rows, not files, so directory headers are
+  focusable: `s` on one queues or dequeues every fetchable file beneath it, and
+  a folder has no database row to remember it by — `cursorDir` is what survives
+  the reload that follows every engine event.
 - Keep Bubble Tea `Update` paths non-blocking; perform I/O in `tea.Cmd`s.
 - Prefer ANSI terminal colors over hex color literals in UI styling.
 - SQLite schema changes must include a migration path for existing databases

@@ -179,9 +179,9 @@ func TestWheelMovesTheCursorOfThePaneUnderThePointer(t *testing.T) {
 	}
 
 	app.Update(wheel(tea.MouseButtonWheelDown, m.listW+4, app.bodyTop))
-	if m.pane != paneFiles || m.fileCursor != 1 {
-		t.Fatalf("wheel over the file pane: pane=%v fileCursor=%d, want the file pane and 1",
-			m.pane, m.fileCursor)
+	if m.pane != paneFiles || m.treeCursor != 1 {
+		t.Fatalf("wheel over the file pane: pane=%v treeCursor=%d, want the file pane and 1",
+			m.pane, m.treeCursor)
 	}
 }
 
@@ -192,23 +192,23 @@ func filePaneModel(t *testing.T, dir string) (*downloadsModel, *[]string) {
 	opened := &[]string{}
 	app, _ := openAddlinkTestApp(t)
 	app.eng = engine.New(nil, nil)
+	dl := &db.Download{ID: 7, Name: "Show", DestPath: dir}
 	m := &downloadsModel{
 		app:  app,
-		rows: []*db.Download{{ID: 7, Name: "Show", DestPath: dir}},
-		files: []db.File{
-			{ID: 1, LocalPath: filepath.Join(dir, "Season 01", "e1.mkv"),
-				Size: 10, Status: db.FileDone, Queued: true},
-			{ID: 2, LocalPath: filepath.Join(dir, "Season 01", "e2.mkv"),
-				Size: 10, Status: db.FileDone, Queued: true},
-			{ID: 3, LocalPath: filepath.Join(dir, "readme.txt"),
-				Size: 10, Status: db.FileDone, Queued: true},
-		},
-		filesFor: 7,
+		rows: []*db.Download{dl},
 		openFile: func(paths []string) error {
 			*opened = append(*opened, paths...)
 			return nil
 		},
 	}
+	m.setFiles(dl, []db.File{
+		{ID: 1, LocalPath: filepath.Join(dir, "Season 01", "e1.mkv"),
+			Size: 10, Status: db.FileDone, Queued: true},
+		{ID: 2, LocalPath: filepath.Join(dir, "Season 01", "e2.mkv"),
+			Size: 10, Status: db.FileDone, Queued: true},
+		{ID: 3, LocalPath: filepath.Join(dir, "readme.txt"),
+			Size: 10, Status: db.FileDone, Queued: true},
+	})
 	m.view(80, 12) // tree rows: "Season 01/", e1, e2, readme.txt
 	return m, opened
 }
@@ -220,14 +220,15 @@ func TestClickSelectsFileRow(t *testing.T) {
 	if cmd := m.mouse(leftClick(m.listW+4, 3)); cmd != nil {
 		t.Fatalf("single click on a file returned a command: %v", cmd)
 	}
-	if m.pane != paneFiles || m.fileCursor != 1 {
-		t.Fatalf("pane=%v fileCursor=%d, want the file pane and file 1", m.pane, m.fileCursor)
+	if m.pane != paneFiles || m.treeCursor != 2 {
+		t.Fatalf("pane=%v treeCursor=%d, want the file pane and the second file",
+			m.pane, m.treeCursor)
 	}
 
-	// a directory header selects the first file beneath it
+	// a directory header is focusable in its own right
 	m.mouse(leftClick(m.listW+4, 1))
-	if m.fileCursor != 0 {
-		t.Fatalf("fileCursor = %d, want the first file under the header", m.fileCursor)
+	if m.treeCursor != 0 || m.cursorFile() != -1 {
+		t.Fatalf("treeCursor = %d, want the directory header itself", m.treeCursor)
 	}
 }
 

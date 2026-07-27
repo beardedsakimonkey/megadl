@@ -582,7 +582,7 @@ func TestSelectionPersistsAndClearsWithItsDownload(t *testing.T) {
 	if err := d.SetSelectedDownload(id); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.SetSelectedFile(id, files[1].ID); err != nil {
+	if err := d.SetSelectedRow(id, files[1].ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.SetFilesPaneSelected(true); err != nil {
@@ -597,8 +597,17 @@ func TestSelectionPersistsAndClearsWithItsDownload(t *testing.T) {
 		t.Fatalf("selected download = %d, %v, want %d", sel, err, id)
 	}
 	dl, err := d.Download(id)
-	if err != nil || dl.SelectedFileID != files[1].ID {
+	if err != nil || dl.SelectedFileID != files[1].ID || dl.SelectedDir != "" {
 		t.Fatalf("selected file = %+v, %v, want %d", dl, err, files[1].ID)
+	}
+
+	// a folder is remembered as a path, and leaves the file behind it in place
+	if err := d.SetSelectedRow(id, files[1].ID, "Season 01"); err != nil {
+		t.Fatal(err)
+	}
+	dl, err = d.Download(id)
+	if err != nil || dl.SelectedDir != "Season 01" || dl.SelectedFileID != files[1].ID {
+		t.Fatalf("selected folder = %+v, %v, want Season 01", dl, err)
 	}
 	if selected, err := d.FilesPaneSelected(); err != nil || !selected {
 		t.Fatalf("files pane selected = %v, %v, want true", selected, err)
@@ -646,7 +655,7 @@ func TestMigrationAddsSelectedFileColumn(t *testing.T) {
 	defer d.Close()
 
 	dl, err := d.Download(1)
-	if err != nil || dl.SelectedFileID != 0 {
+	if err != nil || dl.SelectedFileID != 0 || dl.SelectedDir != "" {
 		t.Fatalf("migrated download = %+v, %v", dl, err)
 	}
 	if err := d.SetSelectedDownload(1); err != nil {

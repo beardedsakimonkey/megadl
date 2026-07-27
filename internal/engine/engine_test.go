@@ -580,6 +580,43 @@ func TestEngineResumeFetchesFilesMergedAfterEnqueue(t *testing.T) {
 	}
 }
 
+// The file pane toggles a folder as one unit, so it hands the engine the whole
+// set of files at once. Every eligible file has to move, and the download's
+// total has to end up rebased on all of them rather than on the first.
+func TestEngineQueuesAndDequeuesFilesInSets(t *testing.T) {
+	d := testDB(t)
+	id := insertDownload(t, d)
+	files, _ := d.Files(id)
+	ids := []int64{files[0].ID, files[1].ID}
+	// a.mkv is already on disk, so nothing the set does may touch it
+	d.SetFileStatusByHandle(id, "h1", db.FileDone)
+
+	eng := New(newFakeDriver(), d) // no Run loop needed
+	eng.DequeueFiles(ids)
+
+	if f, _ := d.File(files[0].ID); !f.Queued || f.Status != db.FileDone {
+		t.Errorf("downloaded file = %+v, want it left queued and done", f)
+	}
+	if f, _ := d.File(files[1].ID); f.Queued {
+		t.Errorf("file = %+v, want it out of the queue", f)
+	}
+	if next, _ := d.NextQueued(); next != nil {
+		t.Errorf("download still queued with nothing pending in it: %+v", next)
+	}
+
+	eng.QueueFiles(ids)
+
+	if f, _ := d.File(files[1].ID); !f.Queued {
+		t.Errorf("file = %+v, want it back in the queue", f)
+	}
+	if dl, _ := d.Download(id); dl.TotalBytes != 150 {
+		t.Errorf("total_bytes = %d, want 150 — the whole set", dl.TotalBytes)
+	}
+	if next, _ := d.NextQueued(); next == nil || next.ID != id {
+		t.Errorf("queueing a set did not put its download back: %+v", next)
+	}
+}
+
 // Taking every file out leaves the download out of the queue. Starting it with
 // nothing selected would tell the driver to fetch the whole folder, so the
 // engine must not start it at all.

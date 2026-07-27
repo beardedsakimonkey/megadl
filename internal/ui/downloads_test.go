@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -347,11 +348,11 @@ func TestFileTreeRows(t *testing.T) {
 	}
 	got := fileTreeRows(files, "/dl/Show")
 	want := []fileTreeRow{
-		{dir: "Season 01", depth: 0},
-		{dir: "Extras", depth: 1},
+		{dir: "Season 01", path: "Season 01", depth: 0},
+		{dir: "Extras", path: "Season 01/Extras", depth: 1},
 		{file: 0, depth: 2},
 		{file: 1, depth: 1},
-		{dir: "Season 02", depth: 0},
+		{dir: "Season 02", path: "Season 02", depth: 0},
 		{file: 2, depth: 1},
 		{file: 3, depth: 0},
 	}
@@ -366,15 +367,14 @@ func TestFileTreeRows(t *testing.T) {
 }
 
 func TestFilesViewRendersDirectoryTree(t *testing.T) {
-	m := &downloadsModel{
-		app: &App{eng: engine.New(nil, nil)},
-		rows: []*db.Download{{ID: 7, Name: "Skins", DestPath: "/dl/Skins",
-			Status: db.StatusDone, TotalBytes: 100}},
-		files: []db.File{
-			{LocalPath: "/dl/Skins/Season 01/Skins - S01E01.mkv", Size: 50, Queued: true},
-			{LocalPath: "/dl/Skins/Season 01/Skins - S01E02.mkv", Size: 50, Queued: true},
-		},
-	}
+	dl := &db.Download{ID: 7, Name: "Skins", DestPath: "/dl/Skins",
+		Status: db.StatusDone, TotalBytes: 100}
+	m := &downloadsModel{app: &App{eng: engine.New(nil, nil)}, rows: []*db.Download{dl}}
+	m.setFiles(dl, []db.File{
+		{LocalPath: "/dl/Skins/Season 01/Skins - S01E01.mkv", Size: 50, Queued: true},
+		{LocalPath: "/dl/Skins/Season 01/Skins - S01E02.mkv", Size: 50, Queued: true},
+	})
+	m.treeCursor = 1 // the first file, one row under its folder header
 	got := ansi.Strip(m.filesView(60, 10))
 
 	if strings.Count(got, "Season 01") != 1 {
@@ -410,14 +410,12 @@ func TestFilesViewRendersDirectoryTree(t *testing.T) {
 // A finished download with a partial selection still measures against the
 // whole folder, so the bar reports how much of it exists locally.
 func TestFilesViewMeasuresProgressAgainstWholeFolder(t *testing.T) {
-	m := &downloadsModel{
-		app:  &App{eng: engine.New(nil, nil)},
-		rows: []*db.Download{{ID: 7, Name: "Show", Status: db.StatusDone, TotalBytes: 100}},
-		files: []db.File{
-			{Size: 100, Status: db.FileDone, Queued: true},
-			{Size: 100, Status: db.FilePending},
-		},
-	}
+	dl := &db.Download{ID: 7, Name: "Show", Status: db.StatusDone, TotalBytes: 100}
+	m := &downloadsModel{app: &App{eng: engine.New(nil, nil)}, rows: []*db.Download{dl}}
+	m.setFiles(dl, []db.File{
+		{Size: 100, Status: db.FileDone, Queued: true},
+		{Size: 100, Status: db.FilePending},
+	})
 	got := m.filesView(60, 10)
 
 	if !strings.Contains(got, "50%") {
@@ -449,15 +447,13 @@ func TestPartialSizesStatsUnfinishedFilesOnly(t *testing.T) {
 // A download that is not being fetched still shows a half-filled bar on a
 // half-fetched file, and counts its on-disk bytes toward the folder total.
 func TestFilesViewShowsPartialProgressWhenIdle(t *testing.T) {
-	m := &downloadsModel{
-		app: &App{eng: engine.New(nil, nil)},
-		rows: []*db.Download{{ID: 7, Name: "Show", DestPath: "/dl/Show",
-			Status: db.StatusPending, TotalBytes: 100}},
-		files: []db.File{
-			{ID: 1, LocalPath: "/dl/Show/e1.mkv", Size: 100, Status: db.FilePending, Queued: true},
-		},
-		partials: map[int64]int64{1: 50},
-	}
+	dl := &db.Download{ID: 7, Name: "Show", DestPath: "/dl/Show",
+		Status: db.StatusPending, TotalBytes: 100}
+	m := &downloadsModel{app: &App{eng: engine.New(nil, nil)}, rows: []*db.Download{dl}}
+	m.setFiles(dl, []db.File{
+		{ID: 1, LocalPath: "/dl/Show/e1.mkv", Size: 100, Status: db.FilePending, Queued: true},
+	})
+	m.partials = map[int64]int64{1: 50}
 	got := m.filesView(60, 10)
 
 	if !strings.Contains(got, "50%") {
@@ -476,14 +472,22 @@ func TestFilesViewShowsPartialProgressWhenIdle(t *testing.T) {
 func playerModel(t *testing.T, files []db.File) (*downloadsModel, *[]string) {
 	t.Helper()
 	opened := &[]string{}
-	return &downloadsModel{
-		pane:  paneFiles,
-		files: files,
+	m := &downloadsModel{
+		pane: paneFiles,
 		openFile: func(paths []string) error {
 			*opened = append(*opened, paths...)
 			return nil
 		},
-	}, opened
+	}
+	// The pane's tree, the way loadFiles builds it. The download standing in
+	// for it has no id, so the cursor bookkeeping stays off the database this
+	// model does not have.
+	dest := ""
+	if len(files) > 0 {
+		dest = filepath.Dir(files[0].LocalPath)
+	}
+	m.setFiles(&db.Download{DestPath: dest}, files)
+	return m, opened
 }
 
 func TestEnterPlaysDownloadedFile(t *testing.T) {
@@ -499,7 +503,7 @@ func TestEnterPlaysDownloadedFile(t *testing.T) {
 		{LocalPath: done, Status: db.FileDone, Queued: true},
 		{LocalPath: skipped, Status: db.FileSkipped, Queued: true},
 	})
-	m.fileCursor = 1
+	m.treeCursor = 1
 
 	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
@@ -539,7 +543,7 @@ func TestEnterQueuesLaterSiblingsAsPlaylist(t *testing.T) {
 		}
 	}
 	m, opened := playerModel(t, files)
-	m.fileCursor = 1 // e5
+	m.treeCursor = 1 // e5
 
 	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
@@ -645,7 +649,7 @@ func TestEnterOnListRowPlaysWholeFolder(t *testing.T) {
 	}
 	m, opened := playerModel(t, files)
 	m.pane = paneList
-	m.fileCursor = 2 // the folder plays from its start, not from here
+	m.treeCursor = 2 // the folder plays from its start, not from here
 
 	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
@@ -723,12 +727,13 @@ func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &downloadsModel{
-		pane:  paneFiles,
-		files: []db.File{{LocalPath: path, Status: db.FileDone, Queued: true}},
+		pane: paneFiles,
 		openFile: func([]string) error {
 			return errors.New("mpv executable not found")
 		},
 	}
+	m.setFiles(&db.Download{DestPath: dir},
+		[]db.File{{LocalPath: path, Status: db.FileDone, Queued: true}})
 
 	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
@@ -771,6 +776,296 @@ func queued(t *testing.T, database *db.DB, id int64) bool {
 		t.Fatal(err)
 	}
 	return slices.Contains(queue, id)
+}
+
+// folderTreeApp builds an app around one folder download with a nested
+// listing, nothing in it queued, focused on the file pane. Its tree is
+//
+//	Season 01/        row 0
+//	  Extras/         row 1
+//	    x.mkv         row 2
+//	  a.mkv           row 3
+//	Season 02/        row 4
+//	  b.mkv           row 5
+//	readme.txt        row 6
+//
+// so a cursor on row 0 covers a folder with a subfolder under it, and rows 4
+// and 6 are its siblings.
+func folderTreeApp(t *testing.T) (*App, *db.DB, int64) {
+	t.Helper()
+	app, database := openAddlinkTestApp(t)
+	app.eng = engine.New(nil, database)
+	id, err := database.InsertDownload(&db.Download{
+		URL: "u", Handle: "h", LinkType: "folder", Name: "Show", DestPath: "/dl/Show",
+	}, []db.File{
+		{NodeHandle: "x", RemotePath: "/Show/Season 01/Extras/x.mkv",
+			LocalPath: "/dl/Show/Season 01/Extras/x.mkv", Size: 10},
+		{NodeHandle: "a", RemotePath: "/Show/Season 01/a.mkv",
+			LocalPath: "/dl/Show/Season 01/a.mkv", Size: 10},
+		{NodeHandle: "b", RemotePath: "/Show/Season 02/b.mkv",
+			LocalPath: "/dl/Show/Season 02/b.mkv", Size: 10},
+		{NodeHandle: "r", RemotePath: "/Show/readme.txt",
+			LocalPath: "/dl/Show/readme.txt", Size: 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.downloads.reload()
+	app.downloads.pane = paneFiles
+	return app, database, id
+}
+
+// queuedFiles reports which of a download's files are in the queue, by node
+// handle, so a folder toggle can be checked against everything it did not
+// touch as well as what it did.
+func queuedFiles(t *testing.T, database *db.DB, id int64) map[string]bool {
+	t.Helper()
+	files, err := database.Files(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, f := range files {
+		got[f.NodeHandle] = f.Queued
+	}
+	return got
+}
+
+func TestSKeyOnFolderQueuesAndDequeuesEverythingUnderIt(t *testing.T) {
+	app, database, id := folderTreeApp(t)
+	m := &app.downloads
+	if m.cursorFile() != -1 {
+		t.Fatalf("cursor starts on file %d, want the Season 01 header", m.cursorFile())
+	}
+
+	pressKey(m, "s") // the whole of Season 01, subfolder included
+	want := map[string]bool{"x": true, "a": true, "b": false, "r": false}
+	if got := queuedFiles(t, database, id); !maps.Equal(got, want) {
+		t.Fatalf("queued files = %v, want %v", got, want)
+	}
+	if !queued(t, database, id) {
+		t.Fatal("queueing a folder did not put its download in the queue")
+	}
+
+	pressKey(m, "s") // all of them are waiting, so this takes them out again
+	want = map[string]bool{"x": false, "a": false, "b": false, "r": false}
+	if got := queuedFiles(t, database, id); !maps.Equal(got, want) {
+		t.Fatalf("queued files = %v, want %v", got, want)
+	}
+}
+
+// A folder only half in the queue is not "already queued": s finishes the job
+// rather than undoing the part that is done.
+func TestSKeyOnPartlyQueuedFolderQueuesTheRest(t *testing.T) {
+	app, database, id := folderTreeApp(t)
+	m := &app.downloads
+	m.treeCursor = 3 // a.mkv
+	pressKey(m, "s")
+	m.treeCursor = 0 // Season 01
+
+	pressKey(m, "s")
+	want := map[string]bool{"x": true, "a": true, "b": false, "r": false}
+	if got := queuedFiles(t, database, id); !maps.Equal(got, want) {
+		t.Fatalf("queued files = %v, want %v", got, want)
+	}
+}
+
+// Files already on disk are not eligible: they cannot be queued, so they must
+// not hold the folder back from reading as fully queued either.
+func TestSKeyOnFolderIgnoresDownloadedFiles(t *testing.T) {
+	app, database, id := folderTreeApp(t)
+	if err := database.SetFileStatusByHandle(id, "x", db.FileDone); err != nil {
+		t.Fatal(err)
+	}
+	m := &app.downloads
+	m.reload()
+	m.treeCursor = 3 // a.mkv, the only file left to fetch in Season 01
+	pressKey(m, "s")
+	m.treeCursor = 0 // Season 01
+
+	if got := m.toggleLabel(); got != "unqueue" {
+		t.Fatalf("toggle label = %q, want unqueue: every fetchable file is waiting", got)
+	}
+	pressKey(m, "s")
+	want := map[string]bool{"x": false, "a": false, "b": false, "r": false}
+	if got := queuedFiles(t, database, id); !maps.Equal(got, want) {
+		t.Fatalf("queued files = %v, want %v", got, want)
+	}
+	if f, _ := database.File(m.files[0].ID); f.Status != db.FileDone {
+		t.Fatalf("downloaded file = %+v, want it left alone", f)
+	}
+}
+
+func TestSKeyOnFullyDownloadedFolderNotices(t *testing.T) {
+	app, database, id := folderTreeApp(t)
+	for _, handle := range []string{"x", "a"} {
+		if err := database.SetFileStatusByHandle(id, handle, db.FileDone); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := &app.downloads
+	m.reload()
+
+	pressKey(m, "s")
+	if !strings.Contains(m.notice, "already downloaded") {
+		t.Fatalf("notice = %q, want already-downloaded notice", m.notice)
+	}
+	if queued(t, database, id) {
+		t.Fatal("a folder with nothing left to fetch was put in the queue")
+	}
+}
+
+func TestSiblingRow(t *testing.T) {
+	rows := fileTreeRows([]db.File{
+		{LocalPath: "/dl/Show/Season 01/Extras/x.mkv"},
+		{LocalPath: "/dl/Show/Season 01/a.mkv"},
+		{LocalPath: "/dl/Show/Season 02/b.mkv"},
+		{LocalPath: "/dl/Show/readme.txt"},
+	}, "/dl/Show")
+
+	tests := []struct {
+		name string
+		from int
+		step int
+		want int
+	}{
+		{name: "folder to the next folder", from: 0, step: 1, want: 4},
+		{name: "deeper rows are stepped over", from: 4, step: 1, want: 6},
+		{name: "folder back to the previous folder", from: 4, step: -1, want: 0},
+		{name: "subfolder to its sibling file", from: 1, step: 1, want: 3},
+		{name: "file out of its folder", from: 3, step: 1, want: 4},
+		{name: "file back to its folder's header", from: 3, step: -1, want: 0},
+		{name: "file out of a subfolder", from: 2, step: 1, want: 3},
+		{name: "file back to its subfolder's header", from: 2, step: -1, want: 1},
+		{name: "a top-level file moves at its own level", from: 6, step: -1, want: 4},
+		{name: "the start of a folder holds", from: 1, step: -1, want: 1},
+		{name: "the end of the listing holds", from: 6, step: 1, want: 6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := siblingRow(rows, tt.from, tt.step); got != tt.want {
+				t.Fatalf("siblingRow(%d, %d) = %d, want %d", tt.from, tt.step, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestJKKeysMoveBetweenSiblings(t *testing.T) {
+	app, _, _ := folderTreeApp(t)
+	m := &app.downloads
+
+	pressKey(m, "J") // Season 01 -> Season 02, over the episodes between them
+	if m.treeCursor != 4 {
+		t.Fatalf("J landed on row %d, want Season 02 (4)", m.treeCursor)
+	}
+	pressKey(m, "J") // -> readme.txt, a file at the same level
+	if m.treeCursor != 6 {
+		t.Fatalf("J landed on row %d, want readme.txt (6)", m.treeCursor)
+	}
+	pressKey(m, "J") // nothing follows it at this level
+	if m.treeCursor != 6 {
+		t.Fatalf("J past the last sibling moved to row %d", m.treeCursor)
+	}
+	pressKey(m, "K")
+	pressKey(m, "K")
+	if m.treeCursor != 0 {
+		t.Fatalf("K landed on row %d, want Season 01 (0)", m.treeCursor)
+	}
+}
+
+// A folder holds the cursor the way a file does: across a restart, and across
+// a trip to another download and back. It has no row of its own, so the
+// download remembers the path.
+func TestFolderSelectionIsRestoredInANewSession(t *testing.T) {
+	app, database, _ := folderTreeApp(t)
+	m := &app.downloads
+	m.treeCursor = 4 // Season 02
+	m.rememberSelection()
+
+	next := &App{cfg: app.cfg, db: database}
+	next.downloads = newDownloadsModel(next)
+	next.downloads.restore()
+
+	if got := next.downloads.tree[next.downloads.treeCursor]; got.path != "Season 02" {
+		t.Fatalf("restored row = %+v, want the Season 02 header", got)
+	}
+	if next.downloads.pane != paneFiles {
+		t.Fatalf("restored pane = %v, want files pane", next.downloads.pane)
+	}
+
+	// and moving back onto a file clears the folder, so the next session
+	// restores the file rather than snapping back to the folder
+	pressKey(&next.downloads, "j")
+	last := &App{cfg: app.cfg, db: database}
+	last.downloads = newDownloadsModel(last)
+	last.downloads.restore()
+	if got := last.downloads.cursorFile(); got != 2 {
+		t.Fatalf("restored file = %d, want b.mkv (2)", got)
+	}
+}
+
+// The cursor is on a folder, which has no database row to remember it by, so
+// the reloads that follow every engine event have to put it back themselves —
+// even when the listing grew rows above it in the meantime.
+func TestFolderStaysFocusedAcrossReloads(t *testing.T) {
+	app, database, id := folderTreeApp(t)
+	m := &app.downloads
+	m.treeCursor = 4 // Season 02
+
+	m.reload()
+	if m.treeCursor != 4 || m.cursorFile() != -1 {
+		t.Fatalf("cursor after reload = row %d (file %d), want Season 02 (4)",
+			m.treeCursor, m.cursorFile())
+	}
+
+	if _, err := database.MergeFiles(id, []db.File{{
+		NodeHandle: "c", RemotePath: "/Show/Season 01/0.mkv",
+		LocalPath: "/dl/Show/Season 01/0.mkv",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	m.reload()
+	if m.treeCursor != 5 || m.tree[m.treeCursor].path != "Season 02" {
+		t.Fatalf("cursor after the listing grew = row %d (%+v), want Season 02 (5)",
+			m.treeCursor, m.tree[m.treeCursor])
+	}
+}
+
+func TestEnterOnFolderPlaysItsFirstFile(t *testing.T) {
+	dir := t.TempDir()
+	season := filepath.Join(dir, "Season 01")
+	if err := os.MkdirAll(season, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := []db.File{
+		{LocalPath: filepath.Join(season, "cover.jpg"), Status: db.FileDone},
+		{LocalPath: filepath.Join(season, "e1.mkv"), Status: db.FileDone},
+		{LocalPath: filepath.Join(dir, "readme.txt"), Status: db.FileDone},
+	}
+	for _, f := range files {
+		if err := os.WriteFile(f.LocalPath, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opened := &[]string{}
+	m := &downloadsModel{
+		pane: paneFiles,
+		openFile: func(paths []string) error {
+			*opened = append(*opened, paths...)
+			return nil
+		},
+	}
+	m.setFiles(&db.Download{DestPath: dir}, files)
+	m.treeCursor = 0 // the Season 01 header
+
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on a folder returned no command")
+	}
+	cmd()
+	if want := []string{filepath.Join(season, "e1.mkv")}; !slices.Equal(*opened, want) {
+		t.Fatalf("opened files = %v, want %v", *opened, want)
+	}
 }
 
 func TestSKeyTogglesDownloadQueueMembership(t *testing.T) {
@@ -934,15 +1229,15 @@ func TestEscDismissesNoticeAndKeepsSelection(t *testing.T) {
 	app, _, _ := toggleTestApp(t)
 	m := &app.downloads
 	m.pane = paneFiles
-	m.fileCursor = 1
+	m.treeCursor = 1
 	m.notice = "something happened"
 
 	m.update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.notice != "" {
 		t.Fatalf("notice = %q, want it dismissed", m.notice)
 	}
-	if m.pane != paneFiles || m.fileCursor != 1 {
-		t.Fatalf("esc moved the selection: pane %v, file cursor %d", m.pane, m.fileCursor)
+	if m.pane != paneFiles || m.treeCursor != 1 {
+		t.Fatalf("esc moved the selection: pane %v, file cursor %d", m.pane, m.treeCursor)
 	}
 
 	// esc with nothing to dismiss still leaves the panes alone; h goes back
@@ -1172,15 +1467,15 @@ func TestDownloadsRememberLastSelectedFilePerFolder(t *testing.T) {
 	}
 
 	selectFolder(firstID)
-	app.downloads.fileCursor = 1
+	app.downloads.treeCursor = 1
 	firstFileID := app.downloads.files[1].ID
 
 	selectFolder(secondID)
-	app.downloads.fileCursor = 1
+	app.downloads.treeCursor = 1
 	secondFileID := app.downloads.files[1].ID
 
 	selectFolder(firstID)
-	if got := app.downloads.files[app.downloads.fileCursor].ID; got != firstFileID {
+	if got := app.downloads.files[app.downloads.cursorFile()].ID; got != firstFileID {
 		t.Fatalf("restored file for first folder = %d, want %d", got, firstFileID)
 	}
 
@@ -1190,12 +1485,12 @@ func TestDownloadsRememberLastSelectedFilePerFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	app.downloads.reload()
-	if got := app.downloads.files[app.downloads.fileCursor].ID; got != firstFileID {
+	if got := app.downloads.files[app.downloads.cursorFile()].ID; got != firstFileID {
 		t.Fatalf("selected file after listing reorder = %d, want %d", got, firstFileID)
 	}
 
 	selectFolder(secondID)
-	if got := app.downloads.files[app.downloads.fileCursor].ID; got != secondFileID {
+	if got := app.downloads.files[app.downloads.cursorFile()].ID; got != secondFileID {
 		t.Fatalf("restored file for second folder = %d, want %d", got, secondFileID)
 	}
 }
@@ -1219,7 +1514,7 @@ func TestSelectionIsRestoredInANewSession(t *testing.T) {
 	pressKey(m, "j") // second row
 	pressKey(m, "l") // into its files
 	pressKey(m, "j") // second file
-	wantDownload, wantFile := m.rows[m.cursor].ID, m.files[m.fileCursor].ID
+	wantDownload, wantFile := m.rows[m.cursor].ID, m.files[m.cursorFile()].ID
 
 	// a fresh app over the same database, as after a restart
 	next := &App{cfg: app.cfg, db: database}
@@ -1229,7 +1524,7 @@ func TestSelectionIsRestoredInANewSession(t *testing.T) {
 	if got := next.downloads.rows[next.downloads.cursor].ID; got != wantDownload {
 		t.Fatalf("restored download = %d, want %d", got, wantDownload)
 	}
-	if got := next.downloads.files[next.downloads.fileCursor].ID; got != wantFile {
+	if got := next.downloads.files[next.downloads.cursorFile()].ID; got != wantFile {
 		t.Fatalf("restored file = %d, want %d", got, wantFile)
 	}
 	if next.downloads.pane != paneFiles {

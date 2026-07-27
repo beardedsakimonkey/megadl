@@ -33,11 +33,21 @@ type downloadsModel struct {
 	cursor int
 	scroll int
 
-	pane       paneID
-	files      []db.File
-	filesFor   int64 // download ID the file pane is showing
-	fileCursor int
-	fileScroll int
+	pane     paneID
+	files    []db.File
+	filesFor int64 // download ID the file pane is showing
+	// tree is what the file pane draws: directory headers interleaved with the
+	// files under them. The cursor indexes it rather than files, so a folder is
+	// focusable in its own right. setFiles rebuilds both together.
+	tree       []fileTreeRow
+	treeCursor int
+	treeScroll int
+	// cursorDir is the path of the directory the cursor is on, empty when it is
+	// on a file. Directories have no row of their own, so this is what puts the
+	// cursor back when a reload rebuilds the tree; it is recorded against the
+	// download as SelectedDir, the way a file is as SelectedFileID, so a folder
+	// keeps the cursor across downloads and across restarts too.
+	cursorDir string
 	// partials caches each unfinished file's on-disk .megatmp size (keyed
 	// by file ID) so stopped files keep their progress bar. loadFiles
 	// refreshes it so View never touches the filesystem.
@@ -202,7 +212,7 @@ func (m *downloadsModel) selectDownload(id int64) {
 // loadFiles refreshes the file pane for the download under the cursor.
 func (m *downloadsModel) loadFiles() {
 	if len(m.rows) == 0 {
-		m.files, m.filesFor, m.partials = nil, 0, nil
+		m.files, m.tree, m.filesFor, m.partials = nil, nil, 0, nil
 		m.pane = paneList
 		return
 	}
@@ -214,23 +224,58 @@ func (m *downloadsModel) loadFiles() {
 		return
 	}
 	if changedDownload {
-		m.fileCursor, m.fileScroll = 0, 0
+		// the incoming download's own remembered row, folder included
+		m.treeCursor, m.treeScroll, m.cursorDir = 0, 0, dl.SelectedDir
 	}
-	for i := range files {
-		if files[i].ID == dl.SelectedFileID {
-			m.fileCursor = i
-			break
-		}
-	}
-	m.filesFor = dl.ID
-	m.files = files
-	m.partials = partialSizes(files)
-	if m.fileCursor >= len(m.files) {
-		m.fileCursor = max(0, len(m.files)-1)
-	}
+	m.setFiles(dl, files)
+	m.focusRow(dl.SelectedFileID)
 	if len(m.files) == 0 {
 		m.pane = paneList
 	}
+}
+
+// setFiles gives the file pane its contents: the files, the tree of directory
+// headers the pane draws them in, and the partial sizes their progress bars
+// read.
+func (m *downloadsModel) setFiles(dl *db.Download, files []db.File) {
+	m.filesFor, m.files = dl.ID, files
+	m.tree = fileTreeRows(files, dl.DestPath)
+	m.partials = partialSizes(files)
+}
+
+// focusRow puts the cursor back where the pane was once the tree is rebuilt:
+// on the folder it was in, or — when it was on a file, or that folder is no
+// longer in the listing — on the download's remembered file. Neither being
+// there leaves the cursor wherever the new tree can hold it.
+func (m *downloadsModel) focusRow(fileID int64) {
+	file := -1
+	for i, r := range m.tree {
+		if r.dir != "" {
+			if m.cursorDir != "" && r.path == m.cursorDir {
+				m.treeCursor = i
+				return
+			}
+			continue
+		}
+		if file < 0 && m.files[r.file].ID == fileID {
+			file = i
+		}
+	}
+	m.cursorDir = "" // whatever folder was remembered, it is not here
+	if file >= 0 {
+		m.treeCursor = file
+		return
+	}
+	m.treeCursor = min(max(m.treeCursor, 0), max(0, len(m.tree)-1))
+}
+
+// cursorFile is the index into files of the file the pane's cursor is on, or
+// -1 when it is on a directory header.
+func (m *downloadsModel) cursorFile() int {
+	if m.treeCursor < 0 || m.treeCursor >= len(m.tree) || m.tree[m.treeCursor].dir != "" {
+		return -1
+	}
+	return m.tree[m.treeCursor].file
 }
 
 // partialSizes stats each unfinished file's .megatmp partial so files that
@@ -268,25 +313,34 @@ func (m *downloadsModel) rememberSelection() {
 	}
 }
 
-// rememberFileCursor records the file pane's cursor against the download the
-// pane is showing, which is not always the one under the list cursor: loadFiles
-// calls this to capture the outgoing selection as the panes switch downloads.
+// rememberFileCursor records where the file pane is focused so a reload — or
+// the next session — can put the cursor back. A folder is recorded as a path,
+// a file as its id, and a folder leaves the remembered file in place so there
+// is still somewhere to land if the folder goes away. Both are recorded
+// against the download the pane is showing, which is not always the one under
+// the list cursor: loadFiles calls this to capture the outgoing selection as
+// the panes switch downloads.
 func (m *downloadsModel) rememberFileCursor() {
-	if m.filesFor == 0 || m.fileCursor < 0 || m.fileCursor >= len(m.files) {
+	if m.filesFor == 0 || m.treeCursor < 0 || m.treeCursor >= len(m.tree) {
 		return
 	}
-	fileID := m.files[m.fileCursor].ID
+	row := m.tree[m.treeCursor]
+	m.cursorDir = row.path // set on directory rows only
 	for _, dl := range m.rows {
 		if dl.ID != m.filesFor {
 			continue
 		}
-		if dl.SelectedFileID == fileID {
+		fileID := dl.SelectedFileID
+		if row.dir == "" {
+			fileID = m.files[row.file].ID
+		}
+		if dl.SelectedFileID == fileID && dl.SelectedDir == m.cursorDir {
 			return // already recorded
 		}
-		dl.SelectedFileID = fileID
-		break
+		dl.SelectedFileID, dl.SelectedDir = fileID, m.cursorDir
+		m.app.db.SetSelectedRow(m.filesFor, fileID, m.cursorDir)
+		return
 	}
-	m.app.db.SetSelectedFile(m.filesFor, fileID)
 }
 
 func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
@@ -354,17 +408,21 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 	if m.pane == paneFiles {
 		switch key.String() {
 		case "up", "k":
-			if m.fileCursor > 0 {
-				m.fileCursor--
+			if m.treeCursor > 0 {
+				m.treeCursor--
 			}
 		case "down", "j":
-			if m.fileCursor < len(m.files)-1 {
-				m.fileCursor++
+			if m.treeCursor < len(m.tree)-1 {
+				m.treeCursor++
 			}
+		case "K":
+			m.treeCursor = siblingRow(m.tree, m.treeCursor, -1)
+		case "J":
+			m.treeCursor = siblingRow(m.tree, m.treeCursor, 1)
 		case "enter":
 			return m.openSelectedFile()
 		case "s":
-			m.toggleFile()
+			m.toggleRow()
 		case "r":
 			return m.startRename()
 		case "left", "h":
@@ -461,13 +519,75 @@ func (m *downloadsModel) toggleDownload() {
 	}
 }
 
+// toggleRow acts on what the file pane's cursor is on: one file, or every
+// eligible file in the folder under a directory header.
+func (m *downloadsModel) toggleRow() {
+	if m.treeCursor >= len(m.tree) || m.cursor >= len(m.rows) {
+		return
+	}
+	if m.tree[m.treeCursor].dir != "" {
+		m.toggleFolder()
+		return
+	}
+	m.toggleFile()
+}
+
+// eligibleFiles returns the files under tree row i the queue can still act on:
+// the row's own file, or everything in the folder it heads, minus whatever is
+// already on disk — there is nothing left to queue or dequeue for those.
+func (m *downloadsModel) eligibleFiles(i int) []db.File {
+	var files []db.File
+	for _, idx := range subtreeFiles(m.tree, i) {
+		f := m.files[idx]
+		if f.Status == db.FileDone || f.Status == db.FileSkipped {
+			continue
+		}
+		files = append(files, f)
+	}
+	return files
+}
+
+// allQueued reports whether every one of files is waiting in the queue, which
+// is what makes the s toggle on a folder take them out rather than put them in.
+func allQueued(files []db.File) bool {
+	for _, f := range files {
+		if !f.Queued {
+			return false
+		}
+	}
+	return len(files) > 0
+}
+
+// toggleFolder queues every eligible file in the folder under the cursor, or
+// takes them all out again once they are all waiting. It reaches into
+// subfolders, so a season with extras under it goes in as one unit.
+func (m *downloadsModel) toggleFolder() {
+	files := m.eligibleFiles(m.treeCursor)
+	if len(files) == 0 {
+		m.notice = "folder already downloaded"
+		return
+	}
+	ids := make([]int64, len(files))
+	for i, f := range files {
+		ids[i] = f.ID
+	}
+	if allQueued(files) {
+		m.app.eng.DequeueFiles(ids)
+	} else {
+		m.app.eng.QueueFiles(ids)
+		m.notePaused()
+	}
+	m.reload()
+}
+
 // toggleFile takes the selected file out of the queue if it is in it, and puts
 // it in otherwise — which puts its download back in the queue too.
 func (m *downloadsModel) toggleFile() {
-	if m.fileCursor >= len(m.files) || m.cursor >= len(m.rows) {
+	i := m.cursorFile()
+	if i < 0 || m.cursor >= len(m.rows) {
 		return
 	}
-	f := m.files[m.fileCursor]
+	f := m.files[i]
 	switch {
 	case f.Status == db.FileDone || f.Status == db.FileSkipped:
 		m.notice = "file already downloaded"
@@ -516,7 +636,7 @@ func (m *downloadsModel) mouse(msg tea.MouseMsg) tea.Cmd {
 
 	if delta := wheelDelta(msg); delta != 0 {
 		if inFiles {
-			m.selectFile(m.fileCursor + delta)
+			m.selectTreeRow(m.treeCursor + delta)
 		} else {
 			m.selectRow(m.cursor + delta)
 		}
@@ -549,33 +669,19 @@ func (m *downloadsModel) clickDownload(y int) {
 	}
 }
 
-// clickFile selects the file on body row y of the file pane, and plays it on
-// a double click. Clicking a directory header selects the first file under it.
+// clickFile selects the row on body row y of the file pane — a file or a
+// directory header, both being focusable — and plays a file on a double click.
 func (m *downloadsModel) clickFile(y int) tea.Cmd {
 	if y == 0 || m.cursor >= len(m.rows) {
 		return nil // pane title
 	}
-	rows := fileTreeRows(m.files, m.rows[m.cursor].DestPath)
-	i := m.fileScroll + y - 1
-	if i < 0 || i >= len(rows) {
+	i := m.treeScroll + y - 1
+	if i < 0 || i >= len(m.tree) {
 		return nil
 	}
-	target := rows[i].file
-	if rows[i].dir != "" {
-		target = -1
-		for j := i + 1; j < len(rows); j++ {
-			if rows[j].dir == "" {
-				target = rows[j].file
-				break
-			}
-		}
-		if target < 0 {
-			return nil
-		}
-	}
-	double := m.clicks.press(clickFile, target)
-	m.selectFile(target)
-	if double && rows[i].dir == "" {
+	double := m.clicks.press(clickFile, i)
+	m.selectTreeRow(i)
+	if double && m.tree[i].dir == "" {
 		return m.openSelectedFile()
 	}
 	return nil
@@ -592,13 +698,14 @@ func (m *downloadsModel) selectRow(i int) {
 	m.loadFiles()
 }
 
-// selectFile focuses the file pane and moves its cursor to i, clamped.
-func (m *downloadsModel) selectFile(i int) {
-	if len(m.files) == 0 {
+// selectTreeRow focuses the file pane and moves its cursor to tree row i,
+// clamped.
+func (m *downloadsModel) selectTreeRow(i int) {
+	if len(m.tree) == 0 {
 		return
 	}
 	m.pane = paneFiles
-	m.fileCursor = min(max(i, 0), len(m.files)-1)
+	m.treeCursor = min(max(i, 0), len(m.tree)-1)
 }
 
 // refreshListing re-fetches the remote listing for the selected folder
@@ -632,20 +739,34 @@ func (m *downloadsModel) refreshListing() tea.Cmd {
 	}
 }
 
-// openSelectedFile plays the highlighted file: the final path once it is
-// complete, otherwise the `.megatmp.<handle>` partial, which already holds
-// decrypted plaintext from the start of the file. Later media files sitting
-// in the same directory are queued behind it so a folder of episodes keeps
-// playing; see playlistTail.
+// openSelectedFile plays what the file pane's cursor is on: the highlighted
+// file — the final path once it is complete, otherwise the `.megatmp.<handle>`
+// partial, which already holds decrypted plaintext from the start of the file
+// — or, on a directory header, the first playable file inside it. Later media
+// files sitting in the same directory are queued behind it so a folder of
+// episodes keeps playing; see playlistTail.
 func (m *downloadsModel) openSelectedFile() tea.Cmd {
-	return m.playFrom(m.fileCursor)
+	if i := m.cursorFile(); i >= 0 {
+		return m.playFrom(i)
+	}
+	return m.playFirst(subtreeFiles(m.tree, m.treeCursor))
 }
 
 // openSelectedDownload plays the whole selected download: playback starts at
 // its first playable file and the rest of that file's folder is queued behind
 // it, so enter on a list row plays a folder without picking a file first.
 func (m *downloadsModel) openSelectedDownload() tea.Cmd {
-	for i, f := range m.files {
+	all := make([]int, len(m.files))
+	for i := range m.files {
+		all[i] = i
+	}
+	return m.playFirst(all)
+}
+
+// playFirst starts playback at the first of the given files that is playable.
+func (m *downloadsModel) playFirst(idx []int) tea.Cmd {
+	for _, i := range idx {
+		f := m.files[i]
 		if !isMediaFile(f.LocalPath) {
 			continue
 		}
@@ -782,8 +903,9 @@ func (m *downloadsModel) help() string {
 	if m.pane == paneFiles {
 		return renderShortcuts(
 			shortcut{keys: []string{"j/k"}, label: "move"},
+			shortcut{keys: []string{"J/K"}, label: "sibling"},
 			shortcut{keys: []string{"⏎"}, label: "play"},
-			shortcut{keys: []string{"s"}, label: m.toggleLabel() + " file"},
+			shortcut{keys: []string{"s"}, label: m.toggleLabel() + " " + m.toggleNoun()},
 			shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
 			shortcut{keys: []string{"r"}, label: "rename"},
 			shortcut{keys: []string{"R"}, label: "refresh listing"},
@@ -815,19 +937,33 @@ func (m *downloadsModel) pauseLabel() string {
 }
 
 // toggleLabel names the half of the s toggle that applies to what the cursor
-// is on, so the footer says what pressing it will do.
+// is on, so the footer says what pressing it will do. A folder counts as
+// queued once everything left to fetch in it is waiting, which is when
+// pressing s would take it back out.
 func (m *downloadsModel) toggleLabel() string {
 	if m.cursor >= len(m.rows) {
 		return "queue"
 	}
 	queued := m.queued(m.rows[m.cursor])
-	if m.pane == paneFiles && m.fileCursor < len(m.files) {
-		queued = m.files[m.fileCursor].Queued
+	if m.pane == paneFiles && m.treeCursor < len(m.tree) {
+		if i := m.cursorFile(); i >= 0 {
+			queued = m.files[i].Queued
+		} else {
+			queued = allQueued(m.eligibleFiles(m.treeCursor))
+		}
 	}
 	if queued {
 		return "unqueue"
 	}
 	return "queue"
+}
+
+// toggleNoun names what the s toggle in the file pane would act on.
+func (m *downloadsModel) toggleNoun() string {
+	if m.treeCursor < len(m.tree) && m.tree[m.treeCursor].dir != "" {
+		return "folder"
+	}
+	return "file"
 }
 
 func (m *downloadsModel) view(width, height int) string {
@@ -909,7 +1045,8 @@ func (m *downloadsModel) rowView(dl *db.Download, snap engine.Snapshot, selected
 // from the files' local paths, or a file (dir == "").
 type fileTreeRow struct {
 	dir   string
-	file  int // index into the files slice, valid when dir == ""
+	path  string // the directory's path under the download, for dir rows
+	file  int    // index into the files slice, valid when dir == ""
 	depth int
 }
 
@@ -930,12 +1067,63 @@ func fileTreeRows(files []db.File, destPath string) []fileTreeRow {
 		}
 		open = open[:common]
 		for _, d := range dirs[common:] {
-			rows = append(rows, fileTreeRow{dir: d, depth: len(open)})
 			open = append(open, d)
+			rows = append(rows, fileTreeRow{
+				dir:   d,
+				path:  strings.Join(open, string(filepath.Separator)),
+				depth: len(open) - 1,
+			})
 		}
 		rows = append(rows, fileTreeRow{file: i, depth: len(open)})
 	}
 	return rows
+}
+
+// subtreeFiles returns the indices into files of everything tree row i covers:
+// the file itself, or every file nested under a directory header, subfolders
+// included. Directory blocks are contiguous, so the subtree runs until the
+// tree comes back out to i's own depth.
+func subtreeFiles(rows []fileTreeRow, i int) []int {
+	if i < 0 || i >= len(rows) {
+		return nil
+	}
+	if rows[i].dir == "" {
+		return []int{rows[i].file}
+	}
+	var files []int
+	for j := i + 1; j < len(rows) && rows[j].depth > rows[i].depth; j++ {
+		if rows[j].dir == "" {
+			files = append(files, rows[j].file)
+		}
+	}
+	return files
+}
+
+// siblingRow is where a J/K move lands from row i: the next (step +1) or
+// previous (step -1) row at the level J/K works on, skipping anything nested
+// deeper and stopping rather than climbing out past that level. From a folder
+// that level is the folder's own, so J on "Season 01" reaches "Season 02"
+// rather than the episodes between them. From a file it is the level of the
+// folder holding it, so J out of an episode leaves the season entirely and
+// lands on "Season 02", and K lands on the season header above it. A file at
+// the top level has no folder to step out of and moves among its own level.
+func siblingRow(rows []fileTreeRow, i, step int) int {
+	if i < 0 || i >= len(rows) {
+		return i
+	}
+	level := rows[i].depth
+	if rows[i].dir == "" {
+		level = max(level-1, 0)
+	}
+	for j := i + step; j >= 0 && j < len(rows); j += step {
+		if rows[j].depth < level {
+			break // left the folder; there is no sibling this way
+		}
+		if rows[j].depth == level {
+			return j
+		}
+	}
+	return i
 }
 
 // filesView renders the contents of the selected download as a tree, each
@@ -963,25 +1151,19 @@ func (m *downloadsModel) filesView(width, height int) string {
 		rowH = 1
 	}
 
-	rows := fileTreeRows(m.files, dl.DestPath)
-	cursorRow := 0
-	for i, r := range rows {
-		if r.dir == "" && r.file == m.fileCursor {
-			cursorRow = i
-			break
-		}
-	}
+	rows := m.tree
+	cursorRow := min(max(m.treeCursor, 0), max(0, len(rows)-1))
 	// scroll in tree-row units; pull ancestor headers directly above the
 	// cursor into view so entering a folder shows its name
 	top := cursorRow
 	for top > 0 && rows[top-1].dir != "" {
 		top--
 	}
-	if top < m.fileScroll {
-		m.fileScroll = top
+	if top < m.treeScroll {
+		m.treeScroll = top
 	}
-	if cursorRow >= m.fileScroll+rowH {
-		m.fileScroll = cursorRow - rowH + 1
+	if cursorRow >= m.treeScroll+rowH {
+		m.treeScroll = cursorRow - rowH + 1
 	}
 
 	sizeW := 0
@@ -989,15 +1171,14 @@ func (m *downloadsModel) filesView(width, height int) string {
 		sizeW = max(sizeW, lipgloss.Width(fileBytes(f.Size)))
 	}
 	lines := []string{title}
-	for i := m.fileScroll; i < min(len(rows), m.fileScroll+rowH); i++ {
+	for i := m.treeScroll; i < min(len(rows), m.treeScroll+rowH); i++ {
 		r := rows[i]
 		if r.dir != "" {
-			indent := cursorBar(false, false) + strings.Repeat("  ", r.depth)
-			lines = append(lines, indent+styleDim.Render(truncate(r.dir+"/", max(1, width-4-2*r.depth))))
+			lines = append(lines, m.dirRowView(r, i == cursorRow, width))
 			continue
 		}
 		lines = append(lines, m.fileRowView(m.files[r.file], dl, snap, pausedFile,
-			r.file == m.fileCursor, r.depth, width, sizeW))
+			i == cursorRow, r.depth, width, sizeW))
 	}
 
 	gutter := styleDim.Render("│ ")
@@ -1064,6 +1245,19 @@ func (m *downloadsModel) pausedFile(dl *db.Download, snap engine.Snapshot) int64
 		return 0
 	}
 	return m.head.file.ID
+}
+
+// dirRowView renders a directory header. It is focusable like a file row, so
+// it carries the same cursor bar and tint when the cursor is on it.
+func (m *downloadsModel) dirRowView(r fileTreeRow, selected bool, width int) string {
+	name := truncate(r.dir+"/", max(1, width-4-2*r.depth))
+	line := cursorBar(selected, m.pane == paneFiles) +
+		strings.Repeat("  ", r.depth) + styleDim.Render(name)
+	if selected {
+		// width less the pane gutter filesView prepends
+		return tintRow(line, width-2)
+	}
+	return line
 }
 
 func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Snapshot, pausedFile int64, selected bool, depth, width, sizeW int) string {

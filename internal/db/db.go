@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS downloads (
   dest_path        TEXT NOT NULL,
   selection        TEXT NOT NULL DEFAULT '',
   selected_file_id INTEGER NOT NULL DEFAULT 0,
+  selected_dir     TEXT NOT NULL DEFAULT '',
   status           TEXT NOT NULL DEFAULT 'queued'
                    CHECK (status IN ('queued','running','stopped','done','error','quota')),
   error            TEXT NOT NULL DEFAULT '',
@@ -100,6 +101,10 @@ type Download struct {
 	DestPath       string
 	Selection      string // comma-joined selected node handles
 	SelectedFileID int64  // file the TUI last highlighted here; 0 if none
+	// SelectedDir is the folder the TUI last highlighted here, relative to
+	// DestPath; empty when the cursor was on a file. Folders have no row of
+	// their own, so the selection is recorded against the download.
+	SelectedDir string
 
 	Status      string
 	Error       string
@@ -156,6 +161,7 @@ func Open(path string) (*DB, error) {
 	// the rename above found nothing to rename.
 	for _, stmt := range []string{
 		`ALTER TABLE downloads ADD COLUMN selected_file_id INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE downloads ADD COLUMN selected_dir TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE downloads ADD COLUMN queued_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE download_files ADD COLUMN queued INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE ui_state ADD COLUMN files_pane_selected INTEGER NOT NULL DEFAULT 0
@@ -251,8 +257,8 @@ func scanDownload(row interface{ Scan(...any) error }) (*Download, error) {
 	var created int64
 	var started, completed sql.NullInt64
 	err := row.Scan(&dl.ID, &dl.URL, &dl.Handle, &dl.LinkType, &dl.Name, &dl.DestPath,
-		&dl.Selection, &dl.SelectedFileID, &dl.Status, &dl.Error, &dl.TotalBytes, &dl.DoneBytes,
-		&created, &started, &completed)
+		&dl.Selection, &dl.SelectedFileID, &dl.SelectedDir, &dl.Status, &dl.Error,
+		&dl.TotalBytes, &dl.DoneBytes, &created, &started, &completed)
 	if err != nil {
 		return nil, err
 	}
@@ -267,8 +273,8 @@ func scanDownload(row interface{ Scan(...any) error }) (*Download, error) {
 }
 
 const downloadCols = `id, url, handle, link_type, name, dest_path, selection,
-	selected_file_id, status, error, total_bytes, done_bytes, created_at,
-	started_at, completed_at`
+	selected_file_id, selected_dir, status, error, total_bytes, done_bytes,
+	created_at, started_at, completed_at`
 
 func (d *DB) collectDownloads(query string, args ...any) ([]*Download, error) {
 	rows, err := d.sql.Query(query, args...)
@@ -514,10 +520,13 @@ func (d *DB) FilesPaneSelected() (bool, error) {
 	return selected, err
 }
 
-// SetSelectedFile records the file the TUI file pane is highlighting inside a
-// download; 0 clears it.
-func (d *DB) SetSelectedFile(downloadID, fileID int64) error {
-	_, err := d.sql.Exec(`UPDATE downloads SET selected_file_id = ? WHERE id = ?`, fileID, downloadID)
+// SetSelectedRow records what the TUI file pane is highlighting inside a
+// download: a file by id (0 clears it), or a folder by its path under
+// DestPath. A folder is recorded with the file it was last on left in place,
+// so losing the folder still leaves somewhere sensible to land.
+func (d *DB) SetSelectedRow(downloadID, fileID int64, dir string) error {
+	_, err := d.sql.Exec(`UPDATE downloads SET selected_file_id = ?, selected_dir = ?
+		WHERE id = ?`, fileID, dir, downloadID)
 	return err
 }
 

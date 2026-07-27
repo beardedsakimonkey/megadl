@@ -375,19 +375,38 @@ func (e *Engine) Enqueue(id int64) {
 // DequeueFile drops one file from the queue. If the running process is
 // fetching from its download, that process restarts without it. The partial
 // stays resumable.
-func (e *Engine) DequeueFile(fileID int64) {
-	f, err := e.db.File(fileID)
-	if err != nil || !f.Queued {
+func (e *Engine) DequeueFile(fileID int64) { e.DequeueFiles([]int64{fileID}) }
+
+// DequeueFiles drops a set of files from the queue — a whole folder at a time,
+// as the file pane hands it over. The active process is restarted once for the
+// set rather than once per file, and files already on disk are left alone
+// since there is nothing of theirs left to drop.
+func (e *Engine) DequeueFiles(fileIDs []int64) {
+	touched := map[int64]bool{} // downloads whose queued set changed
+	pending := map[int64]bool{} // ...where an unfetched file left it
+	for _, id := range fileIDs {
+		f, err := e.db.File(id)
+		if err != nil || !f.Queued {
+			continue
+		}
+		if f.Status == db.FileDone || f.Status == db.FileSkipped {
+			continue // already on disk; nothing to drop
+		}
+		e.db.SetFileQueued(id, false)
+		touched[f.DownloadID] = true
+		if f.Status == db.FilePending {
+			pending[f.DownloadID] = true
+		}
+	}
+	if len(touched) == 0 {
 		return
 	}
-	if f.Status == db.FileDone || f.Status == db.FileSkipped {
-		return // already on disk; nothing to drop
+	for id := range touched {
+		e.db.RecalcTotalBytes(id)
 	}
-	e.db.SetFileQueued(fileID, false)
-	e.db.RecalcTotalBytes(f.DownloadID)
 
 	e.mu.Lock()
-	if e.act != nil && e.act.id == f.DownloadID && !e.act.stopping && f.Status == db.FilePending {
+	if e.act != nil && pending[e.act.id] && !e.act.stopping {
 		e.act.requeue = true
 		e.act.proc.Stop()
 	}
@@ -397,23 +416,38 @@ func (e *Engine) DequeueFile(fileID int64) {
 
 // QueueFile adds one file to the queue, which puts its download back in too.
 // An active process is restarted when its selection has to change.
-func (e *Engine) QueueFile(fileID int64) {
-	f, err := e.db.File(fileID)
-	if err != nil {
+func (e *Engine) QueueFile(fileID int64) { e.QueueFiles([]int64{fileID}) }
+
+// QueueFiles adds a set of files to the queue, which puts their downloads back
+// in too. Like DequeueFiles it takes a folder in one go, so an active process
+// restarts once for the whole set instead of once per file.
+func (e *Engine) QueueFiles(fileIDs []int64) {
+	touched := map[int64]bool{} // downloads the set reaches into
+	changed := map[int64]bool{} // ...where a file's queue membership moved
+	for _, id := range fileIDs {
+		f, err := e.db.File(id)
+		if err != nil {
+			continue
+		}
+		if f.Status == db.FileDone || f.Status == db.FileSkipped {
+			continue // nothing to fetch
+		}
+		touched[f.DownloadID] = true
+		if !f.Queued || f.Status == db.FileError {
+			e.db.SetFileQueued(id, true)
+			changed[f.DownloadID] = true
+		}
+	}
+	if len(touched) == 0 {
 		return
 	}
-	if f.Status == db.FileDone || f.Status == db.FileSkipped {
-		return // nothing to fetch
-	}
-	changed := !f.Queued || f.Status == db.FileError
-	if changed {
-		e.db.SetFileQueued(fileID, true)
-		e.db.RecalcTotalBytes(f.DownloadID)
+	for id := range changed {
+		e.db.RecalcTotalBytes(id)
 	}
 
 	e.mu.Lock()
-	act := e.act != nil && e.act.id == f.DownloadID
-	if act && !e.act.stopping && changed {
+	act := e.act != nil && touched[e.act.id]
+	if act && !e.act.stopping && changed[e.act.id] {
 		e.act.requeue = true
 		e.act.proc.Stop()
 	}
