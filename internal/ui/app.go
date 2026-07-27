@@ -323,6 +323,13 @@ func (a *App) statusbarView() string {
 	}
 	snap := a.eng.Snapshot()
 	if snap.ActiveID != 0 && snap.CurrentFile != "" {
+		// The live count reads zero between a file starting and its transfer
+		// reporting how much is left, so floor it at the partial already on
+		// disk the same way the file rows do: a resumed file's strip never
+		// blinks back to 0% on the way to picking up where it left off.
+		if head := a.downloads.head; head.file != nil && head.file.LocalPath == snap.CurrentPath {
+			snap.FileDone = max(snap.FileDone, head.partial)
+		}
 		return statusbarLine(snap, a.spinner.View(), a.width)
 	}
 

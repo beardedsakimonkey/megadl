@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -12,6 +14,7 @@ import (
 
 	"megadl/internal/db"
 	"megadl/internal/engine"
+	"megadl/internal/mega"
 )
 
 func TestFooterStylesOnlyShortcutKeyAsBrightAndBold(t *testing.T) {
@@ -189,6 +192,52 @@ func TestStatusbarShowsQueueHeadWaiting(t *testing.T) {
 	}
 	if !strings.Contains(app.footerView(), app.statusbarView()) {
 		t.Fatal("footer should carry the statusbar")
+	}
+}
+
+// startedProc is a download that has announced its file and then goes quiet,
+// which is the window between a file starting and its transfer reporting how
+// many bytes are left to fetch.
+type startedProc struct {
+	events chan mega.Event
+}
+
+func (p *startedProc) Events() <-chan mega.Event { return p.events }
+func (p *startedProc) Stop()                     { close(p.events) }
+
+type startedDriver struct{ path string }
+
+func (d startedDriver) List(context.Context, string) ([]mega.Node, error) { return nil, nil }
+
+func (d startedDriver) Start(context.Context, mega.DownloadArgs) (mega.Proc, error) {
+	p := &startedProc{events: make(chan mega.Event, 1)}
+	p.events <- mega.FileStartEvent{Path: d.path, Size: 100}
+	return p, nil
+}
+
+// Resuming a partial file must not flash the strip back to 0%: the engine has
+// no byte count of its own until the transfer starts, so the strip stays on the
+// partial already on disk until the live count passes it.
+func TestStatusbarKeepsPartialProgressWhileTransferStarts(t *testing.T) {
+	app, database, files := queueBarApp(t, 40)
+
+	app.eng = engine.New(startedDriver{path: files[0].LocalPath}, database)
+	go app.eng.Run(t.Context())
+	app.eng.Kick()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for app.eng.Snapshot().CurrentFile == "" {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the download to start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	got := ansi.Strip(app.statusbarView())
+	for _, want := range []string{"episode-01.mkv", " 40%", "40 / 100 B"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("statusbar = %q, want %q", got, want)
+		}
 	}
 }
 
