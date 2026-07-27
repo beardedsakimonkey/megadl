@@ -1152,11 +1152,13 @@ func siblingRow(rows []fileTreeRow, i, step int) int {
 func (m *downloadsModel) filesView(width, height int) string {
 	dl := m.rows[m.cursor]
 	var haveBytes, totalBytes int64
+	completed := 0
 	snap := m.app.eng.Snapshot()
 	for _, f := range m.files {
 		totalBytes += f.Size
 		switch {
 		case f.Status == db.FileDone || f.Status == db.FileSkipped:
+			completed++
 			haveBytes += f.Size
 		case isFetching(f, dl, snap):
 			haveBytes += max(snap.FileDone, m.partials[f.ID])
@@ -1164,7 +1166,7 @@ func (m *downloadsModel) filesView(width, height int) string {
 			haveBytes += m.partials[f.ID]
 		}
 	}
-	title := filesTitle(dl, len(m.files), haveBytes, totalBytes, max(0, width-2))
+	title := filesTitle(dl, completed, len(m.files), haveBytes, totalBytes, max(0, width-2))
 	pausedFile := m.pausedFile(dl, snap)
 
 	rowH := height - 1 // title line
@@ -1212,12 +1214,12 @@ func (m *downloadsModel) filesView(width, height int) string {
 // filesTitle keeps the selected folder name and file count on the left, and
 // aligns on the right how much of the whole folder is present locally —
 // measured against every file in it, queued or not.
-func filesTitle(dl *db.Download, total int, haveBytes, totalBytes int64, width int) string {
+func filesTitle(dl *db.Download, completed, total int, haveBytes, totalBytes int64, width int) string {
 	if width <= 0 {
 		return ""
 	}
 
-	count := fmt.Sprintf("  %d files", total)
+	count := fmt.Sprintf("  %d/%d files", completed, total)
 	if totalBytes <= 0 {
 		if lipgloss.Width(count) > width-4 {
 			return styleTitle.Render(truncate(dl.Name, width))
