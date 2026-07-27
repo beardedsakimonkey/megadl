@@ -56,8 +56,10 @@ CREATE INDEX IF NOT EXISTS idx_transfer_ts ON transfer_log(ts);
 -- Single row (id = 1) holding view state that outlives the process. The
 -- foreign key clears the selection when the download it points at is removed.
 CREATE TABLE IF NOT EXISTS ui_state (
-  id                   INTEGER PRIMARY KEY CHECK (id = 1),
-  selected_download_id INTEGER REFERENCES downloads(id) ON DELETE SET NULL
+  id                         INTEGER PRIMARY KEY CHECK (id = 1),
+  selected_download_id       INTEGER REFERENCES downloads(id) ON DELETE SET NULL,
+  files_pane_selected        INTEGER NOT NULL DEFAULT 0
+                             CHECK (files_pane_selected IN (0,1))
 );
 
 -- Single row (id = 1) holding queue state. Pausing belongs to the queue as a
@@ -156,6 +158,8 @@ func Open(path string) (*DB, error) {
 		`ALTER TABLE downloads ADD COLUMN selected_file_id INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE downloads ADD COLUMN queued_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE download_files ADD COLUMN queued INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE ui_state ADD COLUMN files_pane_selected INTEGER NOT NULL DEFAULT 0
+			CHECK (files_pane_selected IN (0,1))`,
 	} {
 		if _, err := h.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			h.Close()
@@ -485,6 +489,25 @@ func (d *DB) SelectedDownload() (int64, error) {
 		return 0, nil
 	}
 	return id.Int64, err
+}
+
+// SetFilesPaneSelected records whether the file pane has focus, so restoring
+// the cursors also restores which of them the user was navigating.
+func (d *DB) SetFilesPaneSelected(selected bool) error {
+	_, err := d.sql.Exec(`INSERT INTO ui_state (id, files_pane_selected) VALUES (1, ?)
+		ON CONFLICT(id) DO UPDATE SET files_pane_selected = excluded.files_pane_selected`, selected)
+	return err
+}
+
+// FilesPaneSelected reports whether the file pane had focus in the last
+// session. It is false before any view selection has been recorded.
+func (d *DB) FilesPaneSelected() (bool, error) {
+	var selected bool
+	err := d.sql.QueryRow(`SELECT files_pane_selected FROM ui_state WHERE id = 1`).Scan(&selected)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return selected, err
 }
 
 // SetSelectedFile records the file the TUI file pane is highlighting inside a

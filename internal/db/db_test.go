@@ -540,12 +540,18 @@ func TestSelectionPersistsAndClearsWithItsDownload(t *testing.T) {
 	if sel, err := d.SelectedDownload(); err != nil || sel != 0 {
 		t.Fatalf("selection before any is recorded = %d, %v", sel, err)
 	}
+	if selected, err := d.FilesPaneSelected(); err != nil || selected {
+		t.Fatalf("files pane selected before any is recorded = %v, %v", selected, err)
+	}
 
 	files, _ := d.Files(id)
 	if err := d.SetSelectedDownload(id); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.SetSelectedFile(id, files[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetFilesPaneSelected(true); err != nil {
 		t.Fatal(err)
 	}
 	// the second write must update the single row, not add another
@@ -559,6 +565,9 @@ func TestSelectionPersistsAndClearsWithItsDownload(t *testing.T) {
 	dl, err := d.Download(id)
 	if err != nil || dl.SelectedFileID != files[1].ID {
 		t.Fatalf("selected file = %+v, %v, want %d", dl, err, files[1].ID)
+	}
+	if selected, err := d.FilesPaneSelected(); err != nil || !selected {
+		t.Fatalf("files pane selected = %v, %v, want true", selected, err)
 	}
 
 	if err := d.DeleteDownload(id); err != nil {
@@ -612,6 +621,9 @@ func TestMigrationAddsSelectedFileColumn(t *testing.T) {
 	if sel, err := d.SelectedDownload(); err != nil || sel != 1 {
 		t.Fatalf("selection in migrated database = %d, %v", sel, err)
 	}
+	if selected, err := d.FilesPaneSelected(); err != nil || selected {
+		t.Fatalf("files pane in migrated database = %v, %v, want false", selected, err)
+	}
 }
 
 // The statusbar follows the queue now, so opening a database from a version
@@ -641,6 +653,9 @@ func TestMigrationDropsStatusbarFileColumn(t *testing.T) {
 
 	if sel, err := d.SelectedDownload(); err != nil || sel != 7 {
 		t.Fatalf("selection in migrated database = %d, %v, want 7", sel, err)
+	}
+	if selected, err := d.FilesPaneSelected(); err != nil || selected {
+		t.Fatalf("files pane in migrated database = %v, %v, want false", selected, err)
 	}
 	if err := d.sql.QueryRow(`SELECT statusbar_file_id FROM ui_state`).Scan(new(int64)); err == nil {
 		t.Fatal("obsolete statusbar_file_id column still exists after migration")

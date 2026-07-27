@@ -1147,6 +1147,17 @@ func TestSelectionIsRestoredInANewSession(t *testing.T) {
 	if got := next.downloads.files[next.downloads.fileCursor].ID; got != wantFile {
 		t.Fatalf("restored file = %d, want %d", got, wantFile)
 	}
+	if next.downloads.pane != paneFiles {
+		t.Fatalf("restored pane = %v, want files pane", next.downloads.pane)
+	}
+
+	pressKey(&next.downloads, "h") // back to the downloads pane
+	last := &App{cfg: app.cfg, db: database}
+	last.downloads = newDownloadsModel(last)
+	last.downloads.restore()
+	if last.downloads.pane != paneList {
+		t.Fatalf("restored pane after leaving files = %v, want downloads pane", last.downloads.pane)
+	}
 }
 
 // The bar fills whole cells, so the percentage next to it has to round the

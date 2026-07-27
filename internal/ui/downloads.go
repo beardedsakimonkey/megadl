@@ -55,6 +55,8 @@ type downloadsModel struct {
 	// savedDownload is the row last written to the database, so repeated
 	// events on the same row don't rewrite it.
 	savedDownload int64
+	// savedPane is the focus last written to the database, for the same reason.
+	savedPane paneID
 
 	confirmRemove bool // pending x confirmation for rows[cursor]
 	refreshing    bool // remote listing fetch in flight
@@ -92,9 +94,9 @@ func newDownloadsModel(app *App) downloadsModel {
 	return downloadsModel{app: app}
 }
 
-// restore opens the view on the download the last session left selected; its
-// file cursor follows from the download's own recorded selection. An unknown
-// or removed download falls back to the top of the list.
+// restore opens the view on the download and pane the last session left
+// selected; its file cursor follows from the download's own recorded
+// selection. An unknown or removed download falls back to the top of the list.
 func (m *downloadsModel) restore() {
 	m.reload()
 	id, err := m.app.db.SelectedDownload()
@@ -105,6 +107,10 @@ func (m *downloadsModel) restore() {
 		if dl.ID == id {
 			m.cursor, m.savedDownload = i, id
 			m.loadFiles()
+			if selected, err := m.app.db.FilesPaneSelected(); err == nil && selected && len(m.files) > 0 {
+				m.pane = paneFiles
+			}
+			m.savedPane = m.pane
 			return
 		}
 	}
@@ -255,6 +261,10 @@ func (m *downloadsModel) rememberSelection() {
 	if id := m.rows[m.cursor].ID; id != m.savedDownload {
 		m.savedDownload = id
 		m.app.db.SetSelectedDownload(id)
+	}
+	if m.pane != m.savedPane {
+		m.savedPane = m.pane
+		m.app.db.SetFilesPaneSelected(m.pane == paneFiles)
 	}
 }
 
