@@ -23,6 +23,10 @@ type fakeDriver struct {
 	mu      sync.Mutex
 	runs    []driverRun
 	started []mega.DownloadArgs
+
+	// beforeStart, when set, runs as the numbered process is about to start,
+	// which is where a test can hold the engine between two runs.
+	beforeStart func(index int)
 }
 
 var _ mega.Driver = (*fakeDriver)(nil)
@@ -45,7 +49,12 @@ func (d *fakeDriver) Start(ctx context.Context, args mega.DownloadArgs) (mega.Pr
 		return nil, fmt.Errorf("unexpected download start %d", index+1)
 	}
 	run := d.runs[index]
+	hook := d.beforeStart
 	d.mu.Unlock()
+
+	if hook != nil {
+		hook(index)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	proc := &fakeProc{events: make(chan mega.Event, 64), cancel: cancel}
@@ -484,6 +493,116 @@ func TestEngineDequeueFileRestartsWithReducedSelection(t *testing.T) {
 	files, _ = d.Files(id)
 	if files[0].Queued || files[0].Status != db.FilePending {
 		t.Errorf("dequeued file = %+v", files[0])
+	}
+}
+
+// Queueing a file into the download that is already running restarts its
+// process, and the snapshot has to keep reporting the file it was fetching
+// across the gap between the two: to the UI an idle moment there reads as the
+// running file dropping back to "waiting".
+func TestEngineQueueFileKeepsActiveAcrossRestart(t *testing.T) {
+	drv := newFakeDriver(
+		driverRun{
+			events: []mega.Event{
+				mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+			},
+			waitForStop: true,
+		},
+		driverRun{events: []mega.Event{
+			mega.FileDoneEvent{Path: "/fake/a.mkv"},
+			mega.FileDoneEvent{Path: "/fake/b.mkv"},
+			mega.EndEvent{Status: 0},
+		}},
+	)
+	starting, release := make(chan struct{}), make(chan struct{})
+	drv.beforeStart = func(index int) {
+		if index == 1 {
+			close(starting)
+			<-release
+		}
+	}
+
+	d := testDB(t)
+	id := insertDownload(t, d)
+	files, _ := d.Files(id)
+	d.SetFileQueued(files[1].ID, false) // b.mkv sits out of the first run
+	d.RecalcTotalBytes(id)
+
+	eng := New(drv, d)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eng.Run(ctx)
+	eng.Kick()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for eng.Snapshot().CurrentFile != "a.mkv" {
+		if time.Now().After(deadline) {
+			t.Fatal("first run never reached file_start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	eng.QueueFile(files[1].ID)
+	<-starting // the first process is gone; the second has not started
+
+	if snap := eng.Snapshot(); snap.ActiveID != id || snap.CurrentFile != "a.mkv" || snap.CurrentPath != "/fake/a.mkv" {
+		t.Errorf("snapshot mid-restart = %+v, want a.mkv still running under %d", snap, id)
+	}
+	if got := eng.ActiveID(); got != id {
+		t.Errorf("ActiveID mid-restart = %d, want %d", got, id)
+	}
+	close(release)
+
+	waitStatus(t, d, id, db.StatusDone)
+	if snap := eng.Snapshot(); snap.ActiveID != 0 {
+		t.Errorf("restart state outlived the run: %+v", snap)
+	}
+}
+
+// A restart the queue never gets to make — the user pauses in the gap — has to
+// let go of the download it was standing in for, or the pause draws as a run.
+func TestEnginePauseDuringRestartClearsActive(t *testing.T) {
+	drv := newFakeDriver(driverRun{
+		events: []mega.Event{
+			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+		},
+		waitForStop: true,
+	})
+
+	d := testDB(t)
+	id := insertDownload(t, d)
+	files, _ := d.Files(id)
+	d.SetFileQueued(files[1].ID, false)
+	d.RecalcTotalBytes(id)
+
+	eng := New(drv, d)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eng.Run(ctx)
+	eng.Kick()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for eng.Snapshot().CurrentFile != "a.mkv" {
+		if time.Now().After(deadline) {
+			t.Fatal("first run never reached file_start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Pause first: the restart's Kick then finds a held queue, and the second
+	// run never happens — the driver has no run left to give it.
+	eng.SetPaused(true)
+	eng.QueueFile(files[1].ID)
+
+	deadline = time.Now().Add(10 * time.Second)
+	for eng.ActiveID() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("paused queue still reports %d active", eng.ActiveID())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if snap := eng.Snapshot(); snap.CurrentFile != "" {
+		t.Errorf("paused snapshot = %+v, want no current file", snap)
 	}
 }
 

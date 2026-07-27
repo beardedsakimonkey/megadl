@@ -58,6 +58,17 @@ type active struct {
 	rate rateMeter
 }
 
+// restarting is what a download keeps of itself between the process a changed
+// selection stopped and the one that replaces it. The download is still the one
+// running as far as anything outside the engine is concerned, so reporting it
+// through the gap keeps the running file from blinking back to "waiting" for
+// the length of a process restart.
+type restarting struct {
+	id   int64
+	file string
+	path string
+}
+
 type Engine struct {
 	drv mega.Driver
 	db  *db.DB
@@ -67,7 +78,8 @@ type Engine struct {
 
 	mu          sync.Mutex
 	act         *active
-	pending     int64 // unflushed downloaded-bytes delta
+	restart     *restarting // set only between a requeue's two processes
+	pending     int64       // unflushed downloaded-bytes delta
 	kick        chan struct{}
 	paused      bool // mirrors queue_state, which is the durable copy
 	pauseReason string
@@ -134,6 +146,13 @@ func (e *Engine) maybeStart(ctx context.Context) {
 	if blocked {
 		return
 	}
+	// Whatever this pass settles on — a new process or an empty queue —
+	// supersedes any restart the snapshot is still standing in for.
+	defer func() {
+		e.mu.Lock()
+		e.restart = nil
+		e.mu.Unlock()
+	}()
 
 	dl, err := e.db.NextQueued()
 	if err != nil || dl == nil {
@@ -323,6 +342,13 @@ func (e *Engine) finishLocked(a *active, exitErr error) {
 		e.db.DequeuePendingFiles(a.id)
 	}
 
+	if a.requeue && !a.stopping && !a.paused {
+		// The download is still the one running; only its file selection
+		// changed. Hold on to what it was fetching so the Kick below can hand
+		// the spinner straight over to the replacement process.
+		e.restart = &restarting{id: a.id, file: a.currentFile, path: a.currentPath}
+	}
+
 	e.act = nil
 	e.Kick()
 }
@@ -486,17 +512,27 @@ func (e *Engine) setPausedLocked(paused bool, reason string) {
 	if e.db != nil {
 		e.db.SetPaused(paused, reason)
 	}
-	if paused && e.act != nil && !e.act.stopping {
-		e.act.paused = true
-		e.act.proc.Stop()
+	if paused {
+		// A restart in flight isn't coming back until the pause lifts, so let
+		// go of the download it was standing in for.
+		e.restart = nil
+		if e.act != nil && !e.act.stopping {
+			e.act.paused = true
+			e.act.proc.Stop()
+		}
 	}
 }
 
-// ActiveID returns the running download's id, or 0.
+// ActiveID returns the running download's id, or 0. A download between the two
+// processes of a restart still counts as running: it is coming straight back,
+// and it is no more removable now than it was a moment ago.
 func (e *Engine) ActiveID() int64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.act == nil {
+		if e.restart != nil {
+			return e.restart.id
+		}
 		return 0
 	}
 	return e.act.id
@@ -506,7 +542,15 @@ func (e *Engine) Snapshot() Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.act == nil {
-		return Snapshot{Paused: e.paused, PauseReason: e.pauseReason}
+		s := Snapshot{Paused: e.paused, PauseReason: e.pauseReason}
+		if e.restart != nil {
+			// No byte counts to report mid-restart; the on-disk partial keeps
+			// the row's progress where it was.
+			s.ActiveID = e.restart.id
+			s.CurrentFile = e.restart.file
+			s.CurrentPath = e.restart.path
+		}
+		return s
 	}
 	a := e.act
 	fileDone := a.fileSize - a.sessionTotal + a.sessionDone
