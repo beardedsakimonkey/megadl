@@ -243,7 +243,13 @@ func (a *App) headerView() string {
 		gap = 1
 	}
 	line := title + strings.Repeat(" ", gap) + quota
-	rule := styleDim.Render(strings.Repeat("─", max(1, a.width)))
+	ruleText := strings.Repeat("─", max(1, a.width))
+	listW, filesW := downloadPaneWidths(a.width, len(a.downloads.files) > 0)
+	if filesW > 0 {
+		ruleText = strings.Repeat("─", listW) + "┬" +
+			strings.Repeat("─", a.width-listW-1)
+	}
+	rule := styleDim.Render(ruleText)
 	return line + "\n" + rule
 }
 

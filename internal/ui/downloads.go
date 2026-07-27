@@ -845,12 +845,7 @@ func (m *downloadsModel) view(width, height int) string {
 		paneHeight = 1
 	}
 
-	listW := width
-	filesW := 0
-	if len(m.files) > 0 && width > 60 {
-		listW = min(44, max(28, width*35/100))
-		filesW = width - listW - 2 // "│ " gutter
-	}
+	listW, filesW := downloadPaneWidths(width, len(m.files) > 0)
 	if filesW == 0 {
 		m.pane = paneList // pane hidden (narrow terminal) — focus can't live there
 	}
@@ -869,6 +864,15 @@ func (m *downloadsModel) view(width, height int) string {
 			"\n\n" + detail
 	}
 	return body
+}
+
+func downloadPaneWidths(width int, hasFiles bool) (listW, filesW int) {
+	listW = width
+	if hasFiles && width > 60 {
+		listW = min(44, max(28, width*35/100))
+		filesW = width - listW - 2 // "│ " gutter
+	}
+	return listW, filesW
 }
 
 // listView renders the downloads column, keeping the cursor visible.
