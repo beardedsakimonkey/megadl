@@ -405,6 +405,11 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 		return m.refreshListing()
 	}
 
+	if key.String() == "f" {
+		m.focusHead()
+		return nil
+	}
+
 	if m.pane == paneFiles {
 		switch key.String() {
 		case "up", "k":
@@ -466,6 +471,33 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// focusHead moves the cursor to what the queue is working on: the download at
+// the front, and the file inside it being fetched or held at. It works from
+// either pane and leaves the focused pane where it is, so f is a jump rather
+// than a change of pane.
+func (m *downloadsModel) focusHead() {
+	if m.head.dl == nil {
+		m.notice = "queue is empty"
+		return
+	}
+	for i, dl := range m.rows {
+		if dl.ID != m.head.dl.ID {
+			continue
+		}
+		if i != m.cursor {
+			m.cursor = i
+			m.loadFiles()
+		}
+		if m.head.file != nil {
+			// the head's file, not the download's remembered one: landing on
+			// the running file is the point of the jump
+			m.cursorDir = ""
+			m.focusRow(m.head.file.ID)
+		}
+		return
+	}
 }
 
 // dismissDetail hides what the detail strip is saying right now. A selected
@@ -907,6 +939,7 @@ func (m *downloadsModel) help() string {
 			shortcut{keys: []string{"⏎"}, label: "play"},
 			shortcut{keys: []string{"s"}, label: m.toggleLabel() + " " + m.toggleNoun()},
 			shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
+			shortcut{keys: []string{"f"}, label: "focus current"},
 			shortcut{keys: []string{"r"}, label: "rename"},
 			shortcut{keys: []string{"R"}, label: "refresh listing"},
 			shortcut{keys: []string{"h"}, label: "back"},
@@ -919,6 +952,7 @@ func (m *downloadsModel) help() string {
 		shortcut{keys: []string{"l"}, label: "files"},
 		shortcut{keys: []string{"s"}, label: m.toggleLabel()},
 		shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
+		shortcut{keys: []string{"f"}, label: "focus current"},
 		shortcut{keys: []string{"r"}, label: "rename"},
 		shortcut{keys: []string{"R"}, label: "refresh"},
 		shortcut{keys: []string{"d"}, label: "remove"},

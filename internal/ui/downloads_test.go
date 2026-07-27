@@ -1430,6 +1430,73 @@ func TestPauseLabelFollowsTheQueue(t *testing.T) {
 	}
 }
 
+// f is the way back to what is actually running after browsing elsewhere, so
+// it has to land on the queue head's own pending file, not on whatever file
+// that download last had selected.
+func TestFKeyJumpsToTheQueueHead(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+	app.eng = engine.New(nil, database)
+	headID, err := database.InsertDownload(&db.Download{
+		URL: "head", Handle: "head", LinkType: "folder", Name: "Head",
+		DestPath: "/dl/Head",
+	}, []db.File{
+		{NodeHandle: "a", RemotePath: "/Head/a", LocalPath: "/dl/Head/a", Queued: true},
+		{NodeHandle: "b", RemotePath: "/Head/b", LocalPath: "/dl/Head/b", Queued: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the first file is already on disk, so the head's work is the second one
+	if err := database.SetFileStatusByHandle(headID, "a", db.FileDone); err != nil {
+		t.Fatal(err)
+	}
+	// newer, and out of the queue, so the cursor starts away from the head
+	if _, err := database.InsertDownload(&db.Download{
+		URL: "other", Handle: "other", LinkType: "folder", Name: "Other",
+		DestPath: "/dl/Other",
+	}, []db.File{
+		{NodeHandle: "c", RemotePath: "/Other/c", LocalPath: "/dl/Other/c"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &app.downloads
+	m.reload()
+	if m.rows[m.cursor].ID == headID {
+		t.Fatal("cursor already on the queue head; the jump proves nothing")
+	}
+
+	pressKey(m, "f")
+	if got := m.rows[m.cursor].ID; got != headID {
+		t.Fatalf("cursor on download %d, want the queue head %d", got, headID)
+	}
+	i := m.cursorFile()
+	if i < 0 {
+		t.Fatal("file cursor left on a directory header, want the head's file")
+	}
+	if got := m.files[i].NodeHandle; got != "b" {
+		t.Fatalf("file cursor on %q, want the head's pending file %q", got, "b")
+	}
+}
+
+func TestFKeyOnAnEmptyQueueSaysSo(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+	if err := database.SetDownloadQueued(id, false); err != nil {
+		t.Fatal(err)
+	}
+	m := &app.downloads
+	m.reload()
+	cursor := m.cursor
+
+	pressKey(m, "f")
+	if !strings.Contains(m.notice, "queue is empty") {
+		t.Fatalf("notice = %q, want an empty-queue notice", m.notice)
+	}
+	if m.cursor != cursor {
+		t.Fatalf("cursor moved to %d with nothing queued, want %d", m.cursor, cursor)
+	}
+}
+
 func TestDownloadsRememberLastSelectedFilePerFolder(t *testing.T) {
 	app, database := openAddlinkTestApp(t)
 	firstID, err := database.InsertDownload(&db.Download{
