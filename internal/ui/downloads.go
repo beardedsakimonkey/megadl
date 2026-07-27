@@ -853,20 +853,12 @@ func (m *downloadsModel) listView(width, height int) string {
 }
 
 func (m *downloadsModel) rowView(dl *db.Download, snap engine.Snapshot, selected bool, width int) string {
-	active := dl.ID == snap.ActiveID
-	extra := ""
-	if active && snap.Rate > 0 {
-		extra = "  " + humanRate(snap.Rate)
-	}
 	spin := m.app.spinFrame()
-	nameW := max(8, width-2-1-1-lipgloss.Width(extra)-2)
+	nameW := max(8, width-2-1-1-2)
 	name := truncate(dl.Name, nameW)
 
 	line := fmt.Sprintf("%s%s %s", cursorBar(selected, m.pane == paneList),
 		dlMarker(m.dlMarkerStateOf(dl, snap), spin), name)
-	if extra != "" {
-		line += styleOK.Render(extra)
-	}
 	if selected {
 		return tintRow(line, width)
 	}
