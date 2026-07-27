@@ -19,7 +19,7 @@ var (
 	// the cursor without setting a foreground: a bright full-row highlight
 	// would flatten the very row being read.
 	styleCursor  = lipgloss.NewStyle().Foreground(colorPrimary)
-	styleRowTint = lipgloss.NewStyle().Background(lipgloss.Color("236"))
+	styleRowTint = lipgloss.NewStyle().Background(lipgloss.Color("237"))
 
 	styleDim         = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	styleError       = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
