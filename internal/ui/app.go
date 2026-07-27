@@ -51,17 +51,17 @@ type App struct {
 
 // The header describes one window of transfers two ways: quota6h is how many
 // bytes landed in it, and spark is when. sparkBuckets divides the window into
-// one bar per hour, which keeps the row narrow enough to sit in the header
-// beside the title.
+// equal slices of time, few enough to keep the row narrow enough to sit in the
+// header beside the title.
 const (
 	quotaWindow      = 6 * time.Hour
 	quotaWindowLabel = "6h"
-	sparkBuckets     = 6
+	sparkBuckets     = 8
 	// sparkFull is the transfer a bar draws at full height. Bars are measured
 	// against it rather than against each other, so a bar's height means the
-	// same thing from one glance to the next: a busy hour reads as busy even
+	// same thing from one glance to the next: a busy stretch reads as busy even
 	// when the rest of the window was idle, and the first few hundred MiB of a
-	// download don't fill the row. A single hour taking the whole window's
+	// download don't fill the row. One bucket taking the whole window's
 	// approximate allowance is as steep as the row needs to go.
 	sparkFull = 5 << 30
 )

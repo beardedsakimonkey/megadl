@@ -11,7 +11,7 @@ import (
 const (
 	colorPrimary    = lipgloss.Color("#FF3B30")
 	colorOrange     = lipgloss.Color("214")
-	colorSparkTrack = lipgloss.Color("236")
+	colorSparkTrack = lipgloss.Color("237")
 )
 
 var (
