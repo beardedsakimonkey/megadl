@@ -255,9 +255,8 @@ func (a *App) headerView() string {
 	title := styleLogoMark.Render(" ◢◣◥◤◢◣ ") +
 		stylePrimaryText.Bold(true).Render("ＭＥＧＡ") +
 		styleHelpKey.Bold(true).Render("ＤＬ™")
-	quotaGiB := strings.TrimSuffix(fmt.Sprintf("%.1f", float64(a.quota6h)/(1<<30)), ".0")
 	quota := styleDim.Render("↓ ") +
-		quotaStyle(a.quota6h).Bold(true).Render(quotaGiB) +
+		quotaStyle(a.quota6h).Bold(true).Render(fmt.Sprintf("%.1f", float64(a.quota6h)/(1<<30))) +
 		styleDim.Render(" GiB")
 	// The sparkline joins the total whenever the header has room to keep them
 	// both clear of the title; on a narrow terminal the number is what matters.
