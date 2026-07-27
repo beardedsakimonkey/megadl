@@ -343,15 +343,16 @@ func TestHeaderShowsAmountInLastSixHours(t *testing.T) {
 func TestSparklineMeasuresBarsAgainstAFixedCeiling(t *testing.T) {
 	const full = 5 << 30
 	got := sparkline([]int64{0, 1, full / 2, full - 1, full, 3 * full}, full, styleOK)
-	want := styleDim.Render("░") + styleOK.Render("▁") + styleOK.Render("▄") +
-		styleOK.Render("▇") + styleOK.Render("█") + styleOK.Render("█")
+	bar := styleOK.Background(colorSparkTrack)
+	want := styleSparkTrack.Render(" ") + bar.Render("▁") + bar.Render("▄") +
+		bar.Render("▇") + bar.Render("█") + bar.Render("█")
 	if got != want {
 		t.Fatalf("sparkline = %q, want %q", got, want)
 	}
 
-	// An idle window is the same dim track used by progress bars.
+	// An idle window is bare track: color only, no glyph.
 	if got, want := sparkline([]int64{0, 0}, full, styleOK),
-		styleDim.Render("░░"); got != want {
+		styleSparkTrack.Render(" ")+styleSparkTrack.Render(" "); got != want {
 		t.Fatalf("idle sparkline = %q, want %q", got, want)
 	}
 }
@@ -360,7 +361,7 @@ func TestSparklineMeasuresBarsAgainstAFixedCeiling(t *testing.T) {
 // download drew a full-height bar with nothing to compare it to.
 func TestSparklineKeepsAModestTransferLow(t *testing.T) {
 	got := sparkline([]int64{300 << 20}, sparkFull, styleOK)
-	if want := styleOK.Render("▁"); got != want {
+	if want := styleOK.Background(colorSparkTrack).Render("▁"); got != want {
 		t.Fatalf("0.3 GiB bar = %q, want %q", got, want)
 	}
 }

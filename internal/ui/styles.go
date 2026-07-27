@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	colorPrimary = lipgloss.Color("#FF3B30")
-	colorOrange  = lipgloss.Color("214")
+	colorPrimary    = lipgloss.Color("#FF3B30")
+	colorOrange     = lipgloss.Color("214")
+	colorSparkTrack = lipgloss.Color("236")
 )
 
 var (
@@ -35,6 +36,11 @@ var (
 	styleHelpKey     = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	styleLogoMark    = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 	styleTitle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
+
+	// styleSparkTrack colors the sparkline's track. The track is a background,
+	// not a glyph, so the part of a cell a bar doesn't reach stays empty and
+	// the bars read as bars instead of blending into a texture.
+	styleSparkTrack = lipgloss.NewStyle().Background(colorSparkTrack)
 
 	styleModal = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorPrimary).Padding(1, 2)
@@ -69,14 +75,15 @@ const sparkLevels = "▁▂▃▄▅▆▇█"
 // without a scale printed beside it. Buckets at or past full fill the cell
 // rather than pulling the rest of the row down with them.
 //
-// Like the progress bars, idle cells use a dim "░" track glyph. Active cells
-// replace the track with the glyph for their transfer level.
+// The whole row sits on the track background, so an idle cell is a blank one
+// and a bar's cell shows the track above it.
 func sparkline(buckets []int64, full int64, style lipgloss.Style) string {
 	levels := []rune(sparkLevels)
+	bar := style.Background(colorSparkTrack)
 	var b strings.Builder
 	for _, v := range buckets {
 		if v <= 0 || full <= 0 {
-			b.WriteString(styleDim.Render("░"))
+			b.WriteString(styleSparkTrack.Render(" "))
 			continue
 		}
 		// Positive buckets start at the shortest glyph. The remaining seven
@@ -84,7 +91,7 @@ func sparkline(buckets []int64, full int64, style lipgloss.Style) string {
 		// exactly at the ceiling rather than one interval before it.
 		level := 1 + int(float64(v)/float64(full)*float64(len(levels)-1))
 		level = min(level, len(levels))
-		b.WriteString(style.Render(string(levels[level-1])))
+		b.WriteString(bar.Render(string(levels[level-1])))
 	}
 	return b.String()
 }
