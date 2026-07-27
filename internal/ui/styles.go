@@ -9,9 +9,8 @@ import (
 )
 
 const (
-	colorPrimary     = lipgloss.Color("#A81006")
-	colorPrimaryText = lipgloss.Color("#FF3B30")
-	colorOrange      = lipgloss.Color("214")
+	colorPrimary = lipgloss.Color("#FF3B30")
+	colorOrange  = lipgloss.Color("214")
 )
 
 var (
@@ -19,7 +18,7 @@ var (
 	// and styleRowTint the faint band behind that row. Between them they mark
 	// the cursor without setting a foreground: a bright full-row highlight
 	// would flatten the very row being read.
-	styleCursor  = lipgloss.NewStyle().Foreground(colorPrimaryText)
+	styleCursor  = lipgloss.NewStyle().Foreground(colorPrimary)
 	styleRowTint = lipgloss.NewStyle().Background(lipgloss.Color("236"))
 
 	styleDim         = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
@@ -29,7 +28,7 @@ var (
 	stylePartial     = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	styleAccent      = lipgloss.NewStyle().Foreground(colorPrimary)
 	styleNotice      = lipgloss.NewStyle().Foreground(colorOrange)
-	stylePrimaryText = lipgloss.NewStyle().Foreground(colorPrimaryText)
+	stylePrimaryText = lipgloss.NewStyle().Foreground(colorPrimary)
 	styleProgress    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleDecode      = lipgloss.NewStyle().Foreground(colorOrange)
 	styleSpinner     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))

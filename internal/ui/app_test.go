@@ -28,14 +28,14 @@ func TestPrimaryStylesUseMegaRed(t *testing.T) {
 	if got := styleAccent.GetForeground(); got != colorPrimary {
 		t.Fatalf("accent foreground = %v, want %v", got, colorPrimary)
 	}
-	if got := stylePrimaryText.GetForeground(); got != colorPrimaryText {
-		t.Fatalf("primary text foreground = %v, want %v", got, colorPrimaryText)
+	if got := stylePrimaryText.GetForeground(); got != colorPrimary {
+		t.Fatalf("primary text foreground = %v, want %v", got, colorPrimary)
 	}
-	if got := styleLogo.GetForeground(); got != colorPrimaryText {
-		t.Fatalf("logo foreground = %v, want %v", got, colorPrimaryText)
+	if got := styleLogo.GetForeground(); got != colorPrimary {
+		t.Fatalf("logo foreground = %v, want %v", got, colorPrimary)
 	}
-	if got := styleCursor.GetForeground(); got != colorPrimaryText {
-		t.Fatalf("cursor bar foreground = %v, want %v", got, colorPrimaryText)
+	if got := styleCursor.GetForeground(); got != colorPrimary {
+		t.Fatalf("cursor bar foreground = %v, want %v", got, colorPrimary)
 	}
 	if got := styleModal.GetBorderTopForeground(); got != colorPrimary {
 		t.Fatalf("modal border = %v, want %v", got, colorPrimary)
