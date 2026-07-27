@@ -34,8 +34,6 @@ var (
 	styleSpinner     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleHelpKey     = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	styleTitle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
-	styleLogo        = stylePrimaryText
-	styleLogoBold    = styleLogo.Bold(true)
 
 	styleModal = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorPrimary).Padding(1, 2)

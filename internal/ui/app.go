@@ -231,12 +231,11 @@ func (a *App) View() string {
 }
 
 func (a *App) headerView() string {
-	title := styleLogo.Render(" 󰇚 ") +
-		styleLogoBold.Render("ＭＥＧＡ") +
-		styleDim.Bold(true).Render(" DL")
+	title := stylePrimaryText.Render(" ＭＥＧＡ") +
+		styleHelpKey.Bold(true).Render("ＤＬ")
 	quota := styleDim.Render("↓ ") +
 		quotaStyle(a.quota6h).Bold(true).Render(fmt.Sprintf("%.1f", float64(a.quota6h)/(1<<30))) +
-		styleDim.Render(" GiB in last 6h")
+		styleDim.Render(" GiB")
 	gap := a.width - lipgloss.Width(title) - lipgloss.Width(quota) - 1
 	if gap < 1 {
 		gap = 1
