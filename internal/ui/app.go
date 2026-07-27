@@ -346,6 +346,7 @@ func (a *App) statusbarView() string {
 		CurrentPath: f.LocalPath,
 		FileSize:    f.Size,
 		FileDone:    head.partial,
+		Paused:      snap.Paused,
 	}
 	// the file's own marker, so the strip and its row in the file pane agree:
 	// spinning while its download runs between files, held while the queue is
@@ -402,7 +403,7 @@ func statusbarLine(snap engine.Snapshot, marker string, width int) string {
 	}
 
 	left := " " + marker + " " + truncate(snap.CurrentFile, nameW())
-	tail := progressBar(barW, frac) + " " + styleTitle.Render(percent)
+	tail := progressBar(barW, frac, snap.Paused) + " " + styleTitle.Render(percent)
 	switch stats {
 	case "":
 	case rate:

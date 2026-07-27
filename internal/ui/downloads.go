@@ -1283,6 +1283,8 @@ func (m *downloadsModel) dirRowView(r fileTreeRow, selected bool, width int) str
 
 func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Snapshot, pausedFile int64, selected bool, depth, width, sizeW int) string {
 	fetching := isFetching(f, dl, snap)
+	paused := pausedFile != 0 && f.ID == pausedFile
+	active := fetching || paused
 
 	indent := strings.Repeat("  ", depth)
 	// the pane gutter (added by filesView) and the cursor column take 2 cells each
@@ -1319,9 +1321,13 @@ func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Sna
 
 	bar := ""
 	if barW > 0 {
-		bar = "  " + fileProgressBar(barW, frac) + " " + styleDim.Render(percent)
+		percentStyle := styleDim
+		if active {
+			percentStyle = styleActivePercent
+		}
+		bar = "  " + fileProgressBar(barW, frac, active, paused) + " " + percentStyle.Render(percent)
 	}
-	st := fileMarkerStateOf(f, fetching, pausedFile != 0 && f.ID == pausedFile, frac)
+	st := fileMarkerStateOf(f, fetching, paused, frac)
 	line := cursorBar(selected, m.pane == paneFiles) + indent +
 		fileMarker(st, m.app.spinFrame()) + " " + name + bar + "  " +
 		styleDim.Render(size) + padding

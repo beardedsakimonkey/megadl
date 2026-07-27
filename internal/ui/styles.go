@@ -36,6 +36,9 @@ var (
 	styleHelpKey     = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	styleLogoMark    = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 	styleTitle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
+	// Leave the foreground unset so the active file's percentage follows the
+	// terminal's own text color.
+	styleActivePercent = lipgloss.NewStyle().Bold(true)
 
 	// styleSparkTrack colors the sparkline's track. The track is a background,
 	// not a glyph, so the part of a cell a bar doesn't reach stays empty and
@@ -212,8 +215,9 @@ func percentText(frac float64) string {
 	return fmt.Sprintf("%3d%%", int(frac*100))
 }
 
-// progressBar renders a fixed-width bar for frac in [0,1].
-func progressBar(width int, frac float64) string {
+// progressBar renders a fixed-width bar for frac in [0,1]. A paused transfer
+// uses the same orange as its pause marker.
+func progressBar(width int, frac float64, paused bool) string {
 	if width < 2 {
 		return ""
 	}
@@ -224,19 +228,32 @@ func progressBar(width int, frac float64) string {
 		frac = 1
 	}
 	filled := int(frac * float64(width))
-	return styleProgress.Render(strings.Repeat("█", filled)) +
+	filledStyle := styleProgress
+	if paused {
+		filledStyle = styleWarn
+	}
+	return filledStyle.Render(strings.Repeat("█", filled)) +
 		styleDim.Render(strings.Repeat("░", width-filled))
 }
 
 // fileProgressBar uses centered line glyphs so bars on adjacent file rows
-// remain visually separate.
-func fileProgressBar(width int, frac float64) string {
+// remain visually separate. The active row gets a heavier filled segment,
+// colored like the pause marker while its queue is held.
+func fileProgressBar(width int, frac float64, active, paused bool) string {
 	if width < 2 {
 		return ""
 	}
 	frac = min(1, max(0, frac))
 	filled := int(frac * float64(width))
-	return styleProgress.Render(strings.Repeat("─", filled)) +
+	filledGlyph := "─"
+	if active {
+		filledGlyph = "━"
+	}
+	filledStyle := styleProgress
+	if paused {
+		filledStyle = styleWarn
+	}
+	return filledStyle.Render(strings.Repeat(filledGlyph, filled)) +
 		styleDim.Render(strings.Repeat("─", width-filled))
 }
 

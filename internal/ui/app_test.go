@@ -247,9 +247,14 @@ func TestStatusbarMarksHeldQueueHead(t *testing.T) {
 	app, _, _ := queueBarApp(t, 40)
 	app.eng.SetPaused(true)
 
-	got := ansi.Strip(app.statusbarView())
-	if !strings.Contains(got, pausedGlyph+" episode-01.mkv") {
-		t.Fatalf("statusbar = %q, want marker %q", got, pausedGlyph)
+	got := app.statusbarView()
+	if plain := ansi.Strip(got); !strings.Contains(plain, pausedGlyph+" episode-01.mkv") {
+		t.Fatalf("statusbar = %q, want marker %q", plain, pausedGlyph)
+	}
+	wantBar := styleWarn.Render(strings.Repeat("█", 8)) +
+		styleDim.Render(strings.Repeat("░", 12))
+	if !strings.Contains(got, wantBar) {
+		t.Fatalf("statusbar = %q, want orange progress bar %q", got, wantBar)
 	}
 }
 

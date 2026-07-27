@@ -22,16 +22,40 @@ import (
 )
 
 func TestProgressBarUsesGreenProgressStyle(t *testing.T) {
-	got := progressBar(4, 0.5)
+	got := progressBar(4, 0.5, false)
 	want := styleProgress.Render("██") + styleDim.Render("░░")
 	if got != want {
 		t.Fatalf("progressBar() = %q, want %q", got, want)
 	}
 }
 
+func TestPausedProgressBarUsesOrangeProgressStyle(t *testing.T) {
+	got := progressBar(4, 0.5, true)
+	want := styleWarn.Render("██") + styleDim.Render("░░")
+	if got != want {
+		t.Fatalf("progressBar() = %q, want %q", got, want)
+	}
+}
+
 func TestFileProgressBarUsesCenteredGlyphs(t *testing.T) {
-	got := fileProgressBar(4, 0.5)
+	got := fileProgressBar(4, 0.5, false, false)
 	want := styleProgress.Render("──") + styleDim.Render("──")
+	if got != want {
+		t.Fatalf("fileProgressBar() = %q, want %q", got, want)
+	}
+}
+
+func TestActiveFileProgressBarUsesHeavyFilledGlyphs(t *testing.T) {
+	got := fileProgressBar(4, 0.5, true, false)
+	want := styleProgress.Render("━━") + styleDim.Render("──")
+	if got != want {
+		t.Fatalf("fileProgressBar() = %q, want %q", got, want)
+	}
+}
+
+func TestPausedFileProgressBarUsesOrangeFilledGlyphs(t *testing.T) {
+	got := fileProgressBar(4, 0.5, true, true)
+	want := styleWarn.Render("━━") + styleDim.Render("──")
 	if got != want {
 		t.Fatalf("fileProgressBar() = %q, want %q", got, want)
 	}
@@ -285,6 +309,60 @@ func TestFileRowShowsProgressBarColumn(t *testing.T) {
 				t.Fatalf("file row = %q, want progress %q", got, want)
 			}
 		})
+	}
+}
+
+func TestActiveFilePercentageUsesBoldTerminalForeground(t *testing.T) {
+	if !styleActivePercent.GetBold() {
+		t.Fatal("active percentage style is not bold")
+	}
+	if _, ok := styleActivePercent.GetForeground().(lipgloss.NoColor); !ok {
+		t.Fatalf("active percentage foreground = %v, want terminal foreground", styleActivePercent.GetForeground())
+	}
+
+	m := &downloadsModel{partials: map[int64]int64{}}
+	f := db.File{
+		ID:        2,
+		LocalPath: "/dl/e2.mkv",
+		Size:      100,
+		Status:    db.FilePending,
+		Queued:    true,
+	}
+	dl := &db.Download{ID: 7}
+	snap := engine.Snapshot{
+		ActiveID:    dl.ID,
+		CurrentFile: filepath.Base(f.LocalPath),
+		CurrentPath: f.LocalPath,
+		FileDone:    50,
+	}
+
+	got := m.fileRowView(f, dl, snap, 0, false, 0, 60, 5)
+	want := styleActivePercent.Render(" 50%")
+	if !strings.Contains(got, want) {
+		t.Fatalf("active file row = %q, want styled percentage %q", got, want)
+	}
+	if plain := ansi.Strip(got); !strings.Contains(plain, "━━━━━─────  50%") {
+		t.Fatalf("active file row = %q, want heavy filled progress bar", plain)
+	}
+}
+
+func TestPausedFileRowUsesOrangeHeavyProgressBar(t *testing.T) {
+	m := &downloadsModel{partials: map[int64]int64{2: 50}}
+	f := db.File{
+		ID:        2,
+		LocalPath: "/dl/e2.mkv",
+		Size:      100,
+		Status:    db.FilePending,
+		Queued:    true,
+	}
+
+	got := m.fileRowView(f, &db.Download{ID: 7}, engine.Snapshot{Paused: true}, f.ID, false, 0, 60, 5)
+	want := styleWarn.Render("━━━━━") + styleDim.Render("─────")
+	if !strings.Contains(got, want) {
+		t.Fatalf("paused file row = %q, want orange heavy progress bar %q", got, want)
+	}
+	if !strings.Contains(got, styleActivePercent.Render(" 50%")) {
+		t.Fatalf("paused file row = %q, want active percentage styling", got)
 	}
 }
 
@@ -1625,14 +1703,14 @@ func TestPercentTextNeverReadsCompleteBeforeTheBarFills(t *testing.T) {
 		if got := percentText(frac); got != " 99%" {
 			t.Fatalf("percentText(%v) = %q, want %q", frac, got, " 99%")
 		}
-		if bar := ansi.Strip(progressBar(20, frac)); !strings.Contains(bar, "░") {
+		if bar := ansi.Strip(progressBar(20, frac, false)); !strings.Contains(bar, "░") {
 			t.Fatalf("progressBar(20, %v) = %q, want an unfilled cell", frac, bar)
 		}
 	}
 	if got := percentText(1); got != "100%" {
 		t.Fatalf("percentText(1) = %q, want %q", got, "100%")
 	}
-	if bar := ansi.Strip(progressBar(20, 1)); strings.Contains(bar, "░") {
+	if bar := ansi.Strip(progressBar(20, 1, false)); strings.Contains(bar, "░") {
 		t.Fatalf("progressBar(20, 1) = %q, want it full", bar)
 	}
 }
