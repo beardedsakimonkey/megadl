@@ -301,12 +301,12 @@ func TestFileRowHidesProgressBarAndPercentageTogether(t *testing.T) {
 
 func TestFilesTitlePlacesFolderProgressOnRight(t *testing.T) {
 	dl := &db.Download{ID: 7, Name: "Rick and Morty"}
-	got := filesTitle(dl, 3, 10, 300, 400, 56)
+	got := filesTitle(dl, 10, 300, 400, 56)
 
 	if width := lipgloss.Width(got); width != 56 {
 		t.Fatalf("title width = %d, want 56: %q", width, got)
 	}
-	if !strings.Contains(got, "Rick and Morty") || !strings.Contains(got, "3/10 files") {
+	if !strings.Contains(got, "Rick and Morty") || !strings.Contains(got, "10 files") {
 		t.Fatalf("title is missing folder details: %q", got)
 	}
 	if !strings.Contains(got, "████") || !strings.Contains(got, "75%") {
@@ -316,7 +316,7 @@ func TestFilesTitlePlacesFolderProgressOnRight(t *testing.T) {
 
 func TestFilesTitleKeepsProgressInNarrowPane(t *testing.T) {
 	dl := &db.Download{ID: 7, Name: "A very long folder name"}
-	got := filesTitle(dl, 1, 20, 50, 100, 24)
+	got := filesTitle(dl, 20, 50, 100, 24)
 
 	if width := lipgloss.Width(got); width != 24 {
 		t.Fatalf("title width = %d, want 24: %q", width, got)
@@ -326,12 +326,12 @@ func TestFilesTitleKeepsProgressInNarrowPane(t *testing.T) {
 	}
 }
 
-func TestFilesTitleFallsBackToCountsWithoutSizes(t *testing.T) {
+func TestFilesTitleFallsBackToCountWithoutSizes(t *testing.T) {
 	dl := &db.Download{ID: 7, Name: "Rick and Morty"}
-	got := filesTitle(dl, 3, 10, 0, 0, 56)
+	got := filesTitle(dl, 10, 0, 0, 56)
 
-	if !strings.Contains(got, "3/10 files") {
-		t.Fatalf("title is missing file counts: %q", got)
+	if !strings.Contains(got, "10 files") {
+		t.Fatalf("title is missing file count: %q", got)
 	}
 	if strings.Contains(got, "%") {
 		t.Fatalf("title shows progress without a known total: %q", got)
