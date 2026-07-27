@@ -33,6 +33,7 @@ var (
 	styleDecode      = lipgloss.NewStyle().Foreground(colorOrange)
 	styleSpinner     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleHelpKey     = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
+	styleLogoMark    = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 	styleTitle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
 
 	styleModal = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
