@@ -268,14 +268,19 @@ func (a *App) headerView() string {
 	}
 	gap := max(1, a.width-lipgloss.Width(right)-lipgloss.Width(title)-1)
 	line := title + strings.Repeat(" ", gap) + right
-	ruleText := strings.Repeat("─", max(1, a.width))
+	return line + "\n" + a.paneRule("┬")
+}
+
+// paneRule closes off the pane region above or below. It carries the split
+// between the two panes through as a junction, so the rules top and bottom meet
+// the gutter that runs between them.
+func (a *App) paneRule(junction string) string {
 	listW, filesW := downloadPaneWidths(a.width, len(a.downloads.files) > 0)
-	if filesW > 0 {
-		ruleText = strings.Repeat("─", listW) + "┬" +
-			strings.Repeat("─", a.width-listW-1)
+	if filesW <= 0 {
+		return styleDim.Render(strings.Repeat("─", max(1, a.width)))
 	}
-	rule := styleDim.Render(ruleText)
-	return line + "\n" + rule
+	return styleDim.Render(strings.Repeat("─", listW) + junction +
+		strings.Repeat("─", a.width-listW-1))
 }
 
 // sparkView draws the transfer window as one labelled row of bars, colored
@@ -289,16 +294,22 @@ func (a *App) sparkView() string {
 		sparkline(a.spark, sparkFull, quotaStyle(a.quota6h))
 }
 
+// footerView draws everything under the panes, all of it hanging off one
+// divider: notices first, then the transfer strip, then the shortcuts.
 func (a *App) footerView() string {
 	line := a.helpLine()
 	if pad := (a.width - lipgloss.Width(line)) / 2; pad > 0 {
 		line = strings.Repeat(" ", pad) + line
 	}
 
-	if bar := a.statusbarView(); bar != "" {
-		return bar + "\n" + line
+	parts := []string{a.paneRule("┴")}
+	if detail := a.downloads.detailView(a.width); detail != "" {
+		parts = append(parts, detail)
 	}
-	return line
+	if bar := a.statusbarView(); bar != "" {
+		parts = append(parts, bar)
+	}
+	return strings.Join(append(parts, line), "\n")
 }
 
 // statusbarView draws the strip for the head of the queue: the file being

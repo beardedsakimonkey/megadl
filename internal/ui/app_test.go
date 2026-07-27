@@ -234,10 +234,13 @@ func TestStatusbarEmptyWhenNothingIsQueued(t *testing.T) {
 	if got := app.statusbarView(); got != "" {
 		t.Fatalf("statusbar = %q, want empty with an empty queue", got)
 	}
+	// with no notice and no strip, the footer is just its divider and the
+	// centered shortcuts
 	help := app.helpLine()
-	want := strings.Repeat(" ", max(0, (app.width-lipgloss.Width(help))/2)) + help
+	want := app.paneRule("┴") + "\n" +
+		strings.Repeat(" ", max(0, (app.width-lipgloss.Width(help))/2)) + help
 	if got := app.footerView(); got != want {
-		t.Fatalf("footer = %q, want centered help line %q", got, want)
+		t.Fatalf("footer = %q, want divider over the centered help line %q", got, want)
 	}
 }
 
@@ -392,5 +395,34 @@ func TestHeaderSparklineYieldsToTheTotalWhenNarrow(t *testing.T) {
 		if w := lipgloss.Width(line); w > app.width {
 			t.Fatalf("header line %q is %d cells wide, want <= %d", line, w, app.width)
 		}
+	}
+}
+
+// Everything under the panes hangs off the footer's divider — notices included,
+// so the panes keep the whole body and nothing floats between them and the rule.
+func TestFooterDividerCarriesNoticesAndStrip(t *testing.T) {
+	app, _, _ := queueBarApp(t, 40)
+	app.height = 20
+	app.downloads.notice = "copied url"
+
+	lines := strings.Split(app.footerView(), "\n")
+	if got := lines[0]; got != app.paneRule("┴") {
+		t.Fatalf("footer starts with %q, want the divider", ansi.Strip(got))
+	}
+	if len(lines) != 4 {
+		t.Fatalf("footer = %q, want divider, notice, strip and help", lines)
+	}
+	if !strings.Contains(ansi.Strip(lines[1]), "copied url") {
+		t.Fatalf("footer line 1 = %q, want the notice", ansi.Strip(lines[1]))
+	}
+	if body := app.downloads.view(app.width, app.bodyHeight); strings.Contains(body, "copied url") {
+		t.Fatal("the notice belongs under the divider, not in the panes")
+	}
+
+	// the two rules meet the pane gutter at the same column
+	header := strings.Split(app.headerView(), "\n")
+	if top, bottom := ansi.Strip(header[1]), ansi.Strip(lines[0]); //
+	strings.IndexRune(top, '┬') != strings.IndexRune(bottom, '┴') {
+		t.Fatalf("junctions misaligned: %q vs %q", top, bottom)
 	}
 }

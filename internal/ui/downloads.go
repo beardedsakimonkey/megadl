@@ -1006,36 +1006,21 @@ func (m *downloadsModel) view(width, height int) string {
 		return styleDim.Render("\n  no downloads yet — press 'a' to add a mega.nz link")
 	}
 
-	// An absent detail block costs nothing: lipgloss.Height("") is 1, so the
-	// subtraction only belongs in the branch that actually draws one.
-	detail := m.detailView(width)
-	paneHeight := height
-	if detail != "" {
-		paneHeight = height - lipgloss.Height(detail) - 1 // blank separator
-	}
-	if paneHeight < 1 {
-		paneHeight = 1
-	}
-
+	// The panes own the whole body: notices, the transfer strip and the
+	// shortcuts all live under the footer's divider.
 	listW, filesW := downloadPaneWidths(width, len(m.files) > 0)
 	if filesW == 0 {
 		m.pane = paneList // pane hidden (narrow terminal) — focus can't live there
 	}
-	m.listW, m.filesW, m.paneHeight = listW, filesW, paneHeight
+	m.listW, m.filesW, m.paneHeight = listW, filesW, height
 
-	list := m.listView(listW, paneHeight)
-	body := list
-	if filesW > 0 {
-		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			lipgloss.NewStyle().Width(listW).Height(paneHeight).MaxHeight(paneHeight).Render(list),
-			m.filesView(filesW, paneHeight))
+	list := m.listView(listW, height)
+	if filesW == 0 {
+		return list
 	}
-
-	if detail != "" {
-		body = lipgloss.NewStyle().Height(paneHeight).MaxHeight(paneHeight).Render(body) +
-			"\n\n" + detail
-	}
-	return body
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(listW).Height(height).MaxHeight(height).Render(list),
+		m.filesView(filesW, height))
 }
 
 func downloadPaneWidths(width int, hasFiles bool) (listW, filesW int) {
@@ -1436,7 +1421,7 @@ func fileMarker(st fileMarkerState, spin string) string {
 	return styleDim.Render(text)
 }
 
-// detailView is the strip under the panes for selected-row errors,
+// detailView is the strip below the footer's divider for selected-row errors,
 // confirmations and notices.
 func (m *downloadsModel) detailView(width int) string {
 	var lines []string
