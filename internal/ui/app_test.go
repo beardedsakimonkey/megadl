@@ -24,6 +24,18 @@ func TestFooterStylesOnlyShortcutKeyAsBrightAndBold(t *testing.T) {
 	}
 }
 
+func TestShortcutStylesSlashesBetweenKeysAsDim(t *testing.T) {
+	got := renderShortcuts(shortcut{
+		keys:  []string{"p/space"},
+		label: "pause",
+	})
+	want := styleHelpKey.Render("p") + styleDim.Render("/") +
+		styleHelpKey.Render("space") + " " + styleDim.Render("pause")
+	if got != want {
+		t.Fatalf("shortcut = %q, want %q", got, want)
+	}
+}
+
 func TestPrimaryStylesUseMegaRed(t *testing.T) {
 	if got := styleAccent.GetForeground(); got != colorPrimary {
 		t.Fatalf("accent foreground = %v, want %v", got, colorPrimary)

@@ -798,24 +798,31 @@ func TestQueueingWhilePausedExplainsItself(t *testing.T) {
 	}
 }
 
-// space holds and releases the queue wherever the cursor happens to be.
-func TestSpaceKeyTogglesPause(t *testing.T) {
-	app, database, _ := toggleTestApp(t)
+// Both pause keys hold and release the queue wherever the cursor happens to be.
+func TestPauseKeysTogglePause(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeySpace, Runes: []rune(" ")},
+		{Type: tea.KeyRunes, Runes: []rune("p")},
+	} {
+		t.Run(key.String(), func(t *testing.T) {
+			app, database, _ := toggleTestApp(t)
 
-	app.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
-	if !app.eng.Paused() {
-		t.Fatal("space did not pause the queue")
-	}
-	if paused, _, _ := database.Paused(); !paused {
-		t.Fatal("pause was not persisted")
-	}
+			app.Update(key)
+			if !app.eng.Paused() {
+				t.Fatalf("%s did not pause the queue", key.String())
+			}
+			if paused, _, _ := database.Paused(); !paused {
+				t.Fatal("pause was not persisted")
+			}
 
-	app.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
-	if app.eng.Paused() {
-		t.Fatal("space did not resume the queue")
-	}
-	if paused, _, _ := database.Paused(); paused {
-		t.Fatal("resume was not persisted")
+			app.Update(key)
+			if app.eng.Paused() {
+				t.Fatalf("%s did not resume the queue", key.String())
+			}
+			if paused, _, _ := database.Paused(); paused {
+				t.Fatal("resume was not persisted")
+			}
+		})
 	}
 }
 

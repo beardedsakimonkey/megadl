@@ -187,7 +187,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			a.addlink = newAddlinkModel(a)
 			return a, a.addlink.init()
-		case " ":
+		case " ", "p":
 			// the queue is paused as a whole, so this ignores the cursor
 			// and acts on whatever the status bar is showing
 			a.eng.SetPaused(!a.eng.Paused())

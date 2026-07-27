@@ -474,7 +474,7 @@ func (m *downloadsModel) toggleFile() {
 // user's decision, not a side effect of picking files.
 func (m *downloadsModel) notePaused() {
 	if m.app.eng.Paused() {
-		m.notice = "queued — the download queue is paused, press space to resume"
+		m.notice = "queued — the download queue is paused, press p/space to resume"
 	}
 }
 
@@ -749,7 +749,7 @@ func (m *downloadsModel) help() string {
 			shortcut{keys: []string{"j/k"}, label: "move"},
 			shortcut{keys: []string{"⏎"}, label: "play"},
 			shortcut{keys: []string{"s"}, label: m.toggleLabel() + " file"},
-			shortcut{keys: []string{"space"}, label: m.pauseLabel()},
+			shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
 			shortcut{keys: []string{"r"}, label: "rename"},
 			shortcut{keys: []string{"R"}, label: "refresh listing"},
 			shortcut{keys: []string{"h"}, label: "back"},
@@ -760,7 +760,7 @@ func (m *downloadsModel) help() string {
 		shortcut{keys: []string{"a"}, label: "add"},
 		shortcut{keys: []string{"⏎"}, label: "files"},
 		shortcut{keys: []string{"s"}, label: m.toggleLabel()},
-		shortcut{keys: []string{"space"}, label: m.pauseLabel()},
+		shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
 		shortcut{keys: []string{"r"}, label: "rename"},
 		shortcut{keys: []string{"R"}, label: "refresh"},
 		shortcut{keys: []string{"x"}, label: "remove"},
@@ -769,7 +769,7 @@ func (m *downloadsModel) help() string {
 	)
 }
 
-// pauseLabel names the half of the space toggle that would happen next. It reads
+// pauseLabel names the half of the pause toggle that would happen next. It reads
 // the queue, not the cursor, since pausing holds the whole queue.
 func (m *downloadsModel) pauseLabel() string {
 	if m.app != nil && m.app.eng != nil && m.app.eng.Paused() {
@@ -1181,10 +1181,10 @@ func (m *downloadsModel) detailView(width int) string {
 	}
 
 	if snap.Paused {
-		reason := "press space to resume"
+		reason := "press p/space to resume"
 		if snap.PauseReason != "" {
 			// a pause the engine imposed, so say what stopped the queue
-			reason = snap.PauseReason + " — press space to resume"
+			reason = snap.PauseReason + " — press p/space to resume"
 		}
 		lines = append(lines, " "+styleWarn.Render("PAUSED — "+reason))
 	}
