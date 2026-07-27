@@ -394,7 +394,7 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 		m.toggleDownload()
 	case "r":
 		return m.startRename()
-	case "x":
+	case "d":
 		if m.cursor < len(m.rows) {
 			if m.rows[m.cursor].ID == m.app.eng.ActiveID() {
 				m.notice = "stop the download before removing it"
@@ -799,7 +799,7 @@ func (m *downloadsModel) help() string {
 		shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
 		shortcut{keys: []string{"r"}, label: "rename"},
 		shortcut{keys: []string{"R"}, label: "refresh"},
-		shortcut{keys: []string{"x"}, label: "remove"},
+		shortcut{keys: []string{"d"}, label: "remove"},
 		shortcut{keys: []string{"y"}, label: "copy url"},
 		shortcut{keys: []string{"q"}, label: "quit"},
 	)

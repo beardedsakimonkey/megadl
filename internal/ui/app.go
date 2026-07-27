@@ -231,9 +231,9 @@ func (a *App) View() string {
 }
 
 func (a *App) headerView() string {
-	title := styleLogoMark.Render("◢◣◥◤◢◣ ") +
+	title := styleLogoMark.Render(" ◢◣◥◤◢◣ ") +
 		stylePrimaryText.Bold(true).Render("ＭＥＧＡ") +
-		styleHelpKey.Bold(true).Render("ＤＬ")
+		styleHelpKey.Bold(true).Render("ＤＬ™")
 	quotaGiB := strings.TrimSuffix(fmt.Sprintf("%.1f", float64(a.quota6h)/(1<<30)), ".0")
 	quota := styleDim.Render("↓ ") +
 		quotaStyle(a.quota6h).Bold(true).Render(quotaGiB) +
