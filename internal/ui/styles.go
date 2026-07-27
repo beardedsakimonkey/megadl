@@ -240,6 +240,18 @@ func fileProgressBar(width int, frac float64) string {
 		styleDim.Render(strings.Repeat("─", width-filled))
 }
 
+// fileHeaderProgressBar gives the file-listing header a heavier filled line
+// while keeping the unfilled portion visually light.
+func fileHeaderProgressBar(width int, frac float64) string {
+	if width < 2 {
+		return ""
+	}
+	frac = min(1, max(0, frac))
+	filled := int(frac * float64(width))
+	return styleProgress.Render(strings.Repeat("━", filled)) +
+		styleDim.Render(strings.Repeat("─", width-filled))
+}
+
 type shortcut struct {
 	keys  []string
 	label string

@@ -37,6 +37,14 @@ func TestFileProgressBarUsesCenteredGlyphs(t *testing.T) {
 	}
 }
 
+func TestFileHeaderProgressBarUsesHeavyFilledGlyphs(t *testing.T) {
+	got := fileHeaderProgressBar(4, 0.5)
+	want := styleProgress.Render("━━") + styleDim.Render("──")
+	if got != want {
+		t.Fatalf("fileHeaderProgressBar() = %q, want %q", got, want)
+	}
+}
+
 func TestDownloadRowOmitsCreationDate(t *testing.T) {
 	m := &downloadsModel{pane: paneList, app: NewApp(nil, nil, nil, nil)}
 	dl := &db.Download{
@@ -310,7 +318,8 @@ func TestFilesTitlePlacesFolderProgressOnRight(t *testing.T) {
 	if !strings.Contains(got, "Rick and Morty") || !strings.Contains(got, "10 files") {
 		t.Fatalf("title is missing folder details: %q", got)
 	}
-	if !strings.Contains(got, "████") || !strings.Contains(got, "75%") {
+	if !strings.Contains(got, strings.Repeat("━", 12)+strings.Repeat("─", 4)) ||
+		!strings.Contains(got, "75%") {
 		t.Fatalf("title is missing folder progress: %q", got)
 	}
 }
@@ -322,7 +331,8 @@ func TestFilesTitleKeepsProgressInNarrowPane(t *testing.T) {
 	if width := lipgloss.Width(got); width != 24 {
 		t.Fatalf("title width = %d, want 24: %q", width, got)
 	}
-	if !strings.Contains(got, "50%") || !strings.Contains(got, "████") {
+	if !strings.Contains(got, "50%") ||
+		!strings.Contains(got, strings.Repeat("━", 4)+strings.Repeat("─", 4)) {
 		t.Fatalf("narrow title dropped folder progress: %q", got)
 	}
 }
@@ -490,7 +500,7 @@ func playerModel(t *testing.T, files []db.File) (*downloadsModel, *[]string) {
 	return m, opened
 }
 
-func TestEnterPlaysDownloadedFile(t *testing.T) {
+func TestOKeyPlaysDownloadedFile(t *testing.T) {
 	dir := t.TempDir()
 	done := filepath.Join(dir, "e1.mkv")
 	skipped := filepath.Join(dir, "e2.mkv")
@@ -505,9 +515,9 @@ func TestEnterPlaysDownloadedFile(t *testing.T) {
 	})
 	m.treeCursor = 1
 
-	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	if cmd == nil {
-		t.Fatal("enter on a downloaded file returned no command")
+		t.Fatal("o on a downloaded file returned no command")
 	}
 	msg := cmd()
 	if len(*opened) != 1 || (*opened)[0] != skipped {
@@ -519,7 +529,7 @@ func TestEnterPlaysDownloadedFile(t *testing.T) {
 	}
 }
 
-func TestEnterQueuesLaterSiblingsAsPlaylist(t *testing.T) {
+func TestOKeyQueuesLaterSiblingsAsPlaylist(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "featurettes")
 	if err := os.Mkdir(sub, 0o755); err != nil {
@@ -545,9 +555,9 @@ func TestEnterQueuesLaterSiblingsAsPlaylist(t *testing.T) {
 	m, opened := playerModel(t, files)
 	m.treeCursor = 1 // e5
 
-	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	if cmd == nil {
-		t.Fatal("enter on a downloaded file returned no command")
+		t.Fatal("o on a downloaded file returned no command")
 	}
 	msg := cmd()
 	want := []string{
@@ -564,7 +574,7 @@ func TestEnterQueuesLaterSiblingsAsPlaylist(t *testing.T) {
 	}
 }
 
-func TestEnterOnPartialQueuesNothingUnplayable(t *testing.T) {
+func TestOKeyOnPartialQueuesNothingUnplayable(t *testing.T) {
 	dir := t.TempDir()
 	partial := filepath.Join(dir, ".megatmp.h1")
 	sibling := filepath.Join(dir, "e2.mkv")
@@ -579,9 +589,9 @@ func TestEnterOnPartialQueuesNothingUnplayable(t *testing.T) {
 		{LocalPath: sibling, Status: db.FileDone, Queued: true},
 	})
 
-	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	if cmd == nil {
-		t.Fatal("enter on an incomplete file returned no command")
+		t.Fatal("o on an incomplete file returned no command")
 	}
 	cmd()
 	want := []string{partial, sibling}
@@ -590,7 +600,7 @@ func TestEnterOnPartialQueuesNothingUnplayable(t *testing.T) {
 	}
 }
 
-func TestEnterPlaysPartialOfIncompleteFile(t *testing.T) {
+func TestOKeyPlaysPartialOfIncompleteFile(t *testing.T) {
 	dir := t.TempDir()
 	partial := filepath.Join(dir, ".megatmp.h1")
 	if err := os.WriteFile(partial, []byte("x"), 0o644); err != nil {
@@ -601,9 +611,9 @@ func TestEnterPlaysPartialOfIncompleteFile(t *testing.T) {
 		Status: db.FilePending, Queued: true,
 	}})
 
-	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	if cmd == nil {
-		t.Fatal("enter on an incomplete file returned no command")
+		t.Fatal("o on an incomplete file returned no command")
 	}
 	msg := cmd()
 	if len(*opened) != 1 || (*opened)[0] != partial {
@@ -615,15 +625,15 @@ func TestEnterPlaysPartialOfIncompleteFile(t *testing.T) {
 	}
 }
 
-func TestEnterWithNothingOnDiskShowsNotice(t *testing.T) {
+func TestOKeyWithNothingOnDiskShowsNotice(t *testing.T) {
 	m, opened := playerModel(t, []db.File{{
 		NodeHandle: "h1", LocalPath: filepath.Join(t.TempDir(), "e1.mkv"),
 		Status: db.FilePending, Queued: true,
 	}})
 
-	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	if cmd == nil {
-		t.Fatal("enter returned no command")
+		t.Fatal("o returned no command")
 	}
 	msg := cmd()
 	if len(*opened) != 0 {
@@ -720,7 +730,7 @@ func TestListPaneLKeyMovesToFiles(t *testing.T) {
 	}
 }
 
-func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
+func TestOKeyReportsPlayerSpawnFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "e1.mkv")
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
@@ -735,9 +745,9 @@ func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
 	m.setFiles(&db.Download{DestPath: dir},
 		[]db.File{{LocalPath: path, Status: db.FileDone, Queued: true}})
 
-	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	if cmd == nil {
-		t.Fatal("enter on a downloaded file returned no command")
+		t.Fatal("o on a downloaded file returned no command")
 	}
 	m.update(cmd())
 	if !strings.Contains(m.notice, "mpv executable not found") {
@@ -831,14 +841,14 @@ func queuedFiles(t *testing.T, database *db.DB, id int64) map[string]bool {
 	return got
 }
 
-func TestSKeyOnFolderQueuesAndDequeuesEverythingUnderIt(t *testing.T) {
+func TestEnterOnFolderQueuesAndDequeuesEverythingUnderIt(t *testing.T) {
 	app, database, id := folderTreeApp(t)
 	m := &app.downloads
 	if m.cursorFile() != -1 {
 		t.Fatalf("cursor starts on file %d, want the Season 01 header", m.cursorFile())
 	}
 
-	pressKey(m, "s") // the whole of Season 01, subfolder included
+	m.update(tea.KeyMsg{Type: tea.KeyEnter}) // the whole of Season 01, subfolder included
 	want := map[string]bool{"x": true, "a": true, "b": false, "r": false}
 	if got := queuedFiles(t, database, id); !maps.Equal(got, want) {
 		t.Fatalf("queued files = %v, want %v", got, want)
@@ -847,23 +857,23 @@ func TestSKeyOnFolderQueuesAndDequeuesEverythingUnderIt(t *testing.T) {
 		t.Fatal("queueing a folder did not put its download in the queue")
 	}
 
-	pressKey(m, "s") // all of them are waiting, so this takes them out again
+	m.update(tea.KeyMsg{Type: tea.KeyEnter}) // all of them are waiting, so this takes them out again
 	want = map[string]bool{"x": false, "a": false, "b": false, "r": false}
 	if got := queuedFiles(t, database, id); !maps.Equal(got, want) {
 		t.Fatalf("queued files = %v, want %v", got, want)
 	}
 }
 
-// A folder only half in the queue is not "already queued": s finishes the job
+// A folder only half in the queue is not "already queued": enter finishes the job
 // rather than undoing the part that is done.
-func TestSKeyOnPartlyQueuedFolderQueuesTheRest(t *testing.T) {
+func TestEnterOnPartlyQueuedFolderQueuesTheRest(t *testing.T) {
 	app, database, id := folderTreeApp(t)
 	m := &app.downloads
 	m.treeCursor = 3 // a.mkv
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	m.treeCursor = 0 // Season 01
 
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	want := map[string]bool{"x": true, "a": true, "b": false, "r": false}
 	if got := queuedFiles(t, database, id); !maps.Equal(got, want) {
 		t.Fatalf("queued files = %v, want %v", got, want)
@@ -872,7 +882,7 @@ func TestSKeyOnPartlyQueuedFolderQueuesTheRest(t *testing.T) {
 
 // Files already on disk are not eligible: they cannot be queued, so they must
 // not hold the folder back from reading as fully queued either.
-func TestSKeyOnFolderIgnoresDownloadedFiles(t *testing.T) {
+func TestEnterOnFolderIgnoresDownloadedFiles(t *testing.T) {
 	app, database, id := folderTreeApp(t)
 	if err := database.SetFileStatusByHandle(id, "x", db.FileDone); err != nil {
 		t.Fatal(err)
@@ -880,13 +890,13 @@ func TestSKeyOnFolderIgnoresDownloadedFiles(t *testing.T) {
 	m := &app.downloads
 	m.reload()
 	m.treeCursor = 3 // a.mkv, the only file left to fetch in Season 01
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	m.treeCursor = 0 // Season 01
 
 	if got := m.toggleLabel(); got != "unqueue" {
 		t.Fatalf("toggle label = %q, want unqueue: every fetchable file is waiting", got)
 	}
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	want := map[string]bool{"x": false, "a": false, "b": false, "r": false}
 	if got := queuedFiles(t, database, id); !maps.Equal(got, want) {
 		t.Fatalf("queued files = %v, want %v", got, want)
@@ -896,7 +906,7 @@ func TestSKeyOnFolderIgnoresDownloadedFiles(t *testing.T) {
 	}
 }
 
-func TestSKeyOnFullyDownloadedFolderNotices(t *testing.T) {
+func TestEnterOnFullyDownloadedFolderNotices(t *testing.T) {
 	app, database, id := folderTreeApp(t)
 	for _, handle := range []string{"x", "a"} {
 		if err := database.SetFileStatusByHandle(id, handle, db.FileDone); err != nil {
@@ -906,7 +916,7 @@ func TestSKeyOnFullyDownloadedFolderNotices(t *testing.T) {
 	m := &app.downloads
 	m.reload()
 
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !strings.Contains(m.notice, "already downloaded") {
 		t.Fatalf("notice = %q, want already-downloaded notice", m.notice)
 	}
@@ -1031,7 +1041,7 @@ func TestFolderStaysFocusedAcrossReloads(t *testing.T) {
 	}
 }
 
-func TestEnterOnFolderPlaysItsFirstFile(t *testing.T) {
+func TestOKeyOnFolderPlaysItsFirstFile(t *testing.T) {
 	dir := t.TempDir()
 	season := filepath.Join(dir, "Season 01")
 	if err := os.MkdirAll(season, 0o755); err != nil {
@@ -1058,9 +1068,9 @@ func TestEnterOnFolderPlaysItsFirstFile(t *testing.T) {
 	m.setFiles(&db.Download{DestPath: dir}, files)
 	m.treeCursor = 0 // the Season 01 header
 
-	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	if cmd == nil {
-		t.Fatal("enter on a folder returned no command")
+		t.Fatal("o on a folder returned no command")
 	}
 	cmd()
 	if want := []string{filepath.Join(season, "e1.mkv")}; !slices.Equal(*opened, want) {
@@ -1113,30 +1123,30 @@ func TestSKeyOnCompletedDownloadNotices(t *testing.T) {
 	}
 }
 
-func TestSKeyTogglesFileQueueMembership(t *testing.T) {
+func TestEnterTogglesFileQueueMembership(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	m := &app.downloads
 	m.pane = paneFiles
 	fileID := m.files[0].ID
 
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if f, err := database.File(fileID); err != nil || f.Queued {
-		t.Fatalf("file after first s = %v (err %v), want out of the queue", f, err)
+		t.Fatalf("file after first enter = %v (err %v), want out of the queue", f, err)
 	}
 	// its sibling is still queued, so the download stays in the queue
 	if !queued(t, database, id) {
 		t.Fatal("download left the queue when only one of its files did")
 	}
 
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if f, err := database.File(fileID); err != nil || !f.Queued {
-		t.Fatalf("file after second s = %v (err %v), want queued", f, err)
+		t.Fatalf("file after second enter = %v (err %v), want queued", f, err)
 	}
 }
 
 // Queueing a single file is enough to put its download back in the queue,
 // without the file pane having to know anything about the download's state.
-func TestSKeyOnFileOfUnqueuedDownloadQueuesItAgain(t *testing.T) {
+func TestEnterOnFileOfUnqueuedDownloadQueuesItAgain(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	if err := database.SetDownloadQueued(id, false); err != nil {
 		t.Fatal(err)
@@ -1146,7 +1156,7 @@ func TestSKeyOnFileOfUnqueuedDownloadQueuesItAgain(t *testing.T) {
 	m.pane = paneFiles
 	fileID := m.files[0].ID
 
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if f, _ := database.File(fileID); !f.Queued {
 		t.Fatalf("file = %v, want queued", f)
 	}
@@ -1206,7 +1216,7 @@ func TestPauseKeysTogglePause(t *testing.T) {
 	}
 }
 
-func TestStopKeyOnDownloadedFileNotices(t *testing.T) {
+func TestEnterOnDownloadedFileNotices(t *testing.T) {
 	app, database, _ := toggleTestApp(t)
 	m := &app.downloads
 	m.pane = paneFiles
@@ -1216,7 +1226,7 @@ func TestStopKeyOnDownloadedFileNotices(t *testing.T) {
 	m.reload()
 	fileID := m.files[0].ID
 
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !strings.Contains(m.notice, "already downloaded") {
 		t.Fatalf("notice = %q, want already-downloaded notice", m.notice)
 	}

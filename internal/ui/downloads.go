@@ -425,9 +425,9 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 		case "J":
 			m.treeCursor = siblingRow(m.tree, m.treeCursor, 1)
 		case "enter":
-			return m.openSelectedFile()
-		case "s":
 			m.toggleRow()
+		case "o":
+			return m.openSelectedFile()
 		case "r":
 			return m.startRename()
 		case "left", "h":
@@ -936,8 +936,8 @@ func (m *downloadsModel) help() string {
 		return renderShortcuts(
 			shortcut{keys: []string{"j/k"}, label: "move"},
 			shortcut{keys: []string{"J/K"}, label: "sibling"},
-			shortcut{keys: []string{"⏎"}, label: "play"},
-			shortcut{keys: []string{"s"}, label: m.toggleLabel() + " " + m.toggleNoun()},
+			shortcut{keys: []string{"⏎"}, label: m.toggleLabel() + " " + m.toggleNoun()},
+			shortcut{keys: []string{"o"}, label: "open"},
 			shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
 			shortcut{keys: []string{"f"}, label: "focus current"},
 			shortcut{keys: []string{"r"}, label: "rename"},
@@ -992,7 +992,7 @@ func (m *downloadsModel) toggleLabel() string {
 	return "queue"
 }
 
-// toggleNoun names what the s toggle in the file pane would act on.
+// toggleNoun names what the enter toggle in the file pane would act on.
 func (m *downloadsModel) toggleNoun() string {
 	if m.treeCursor < len(m.tree) && m.tree[m.treeCursor].dir != "" {
 		return "folder"
@@ -1232,7 +1232,7 @@ func filesTitle(dl *db.Download, total int, haveBytes, totalBytes int64, width i
 		return styleTitle.Render(truncate(dl.Name, width))
 	}
 	barW := min(16, max(6, width/3))
-	progress := progressBar(barW, frac) + " " + styleTitle.Render(percentText(frac))
+	progress := fileHeaderProgressBar(barW, frac) + " " + styleTitle.Render(percentText(frac))
 	progressW := lipgloss.Width(progress)
 	leftW := max(1, width-progressW-2)
 
