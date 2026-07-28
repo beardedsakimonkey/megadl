@@ -1378,6 +1378,45 @@ func TestZCentersFilePaneCursor(t *testing.T) {
 	}
 }
 
+func TestPageKeysMoveFilePaneByVisibleRows(t *testing.T) {
+	m := downloadsModel{
+		pane:       paneFiles,
+		tree:       make([]fileTreeRow, 20),
+		treeCursor: 3,
+		paneHeight: 8, // title plus seven file rows
+	}
+
+	m.update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.treeCursor != 10 {
+		t.Fatalf("cursor after page down = %d, want 10", m.treeCursor)
+	}
+
+	m.update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.treeCursor != 3 {
+		t.Fatalf("cursor after page up = %d, want 3", m.treeCursor)
+	}
+}
+
+func TestPageKeysClampFilePaneCursor(t *testing.T) {
+	m := downloadsModel{
+		pane:       paneFiles,
+		tree:       make([]fileTreeRow, 10),
+		treeCursor: 7,
+		paneHeight: 8,
+	}
+
+	m.update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.treeCursor != 9 {
+		t.Fatalf("cursor after page down = %d, want last row 9", m.treeCursor)
+	}
+
+	m.update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m.update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.treeCursor != 0 {
+		t.Fatalf("cursor after page up = %d, want first row 0", m.treeCursor)
+	}
+}
+
 // stalledDriver reports a quota stall on the file it starts, then waits to be
 // stopped, so the engine keeps the stall in its snapshot the way a real 509
 // does.

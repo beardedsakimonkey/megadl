@@ -408,6 +408,10 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 			if m.treeCursor < len(m.tree)-1 {
 				m.treeCursor++
 			}
+		case "pgup":
+			m.moveTreeCursor(-m.treePageSize())
+		case "pgdown":
+			m.moveTreeCursor(m.treePageSize())
 		case "K":
 			m.treeCursor = siblingRow(m.tree, m.treeCursor, -1)
 		case "J":
@@ -748,6 +752,19 @@ func (m *downloadsModel) selectTreeRow(i int) {
 	}
 	m.pane = paneFiles
 	m.treeCursor = min(max(i, 0), len(m.tree)-1)
+}
+
+// moveTreeCursor moves the file-pane cursor by tree rows, clamping at either
+// end. A page is the rows below the pane's one-line title.
+func (m *downloadsModel) moveTreeCursor(delta int) {
+	if len(m.tree) == 0 {
+		return
+	}
+	m.treeCursor = min(max(m.treeCursor+delta, 0), len(m.tree)-1)
+}
+
+func (m *downloadsModel) treePageSize() int {
+	return max(1, m.paneHeight-1)
 }
 
 // refreshListing re-fetches the remote listing for the selected folder
