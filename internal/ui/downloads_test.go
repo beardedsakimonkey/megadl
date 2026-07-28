@@ -1401,6 +1401,51 @@ func TestPageKeysMoveFilePaneByVisibleRows(t *testing.T) {
 	}
 }
 
+func TestPageKeysMoveDownloadsPaneByVisibleRows(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+	m := app.downloads
+	for i := range 20 {
+		if _, err := database.InsertDownload(&db.Download{
+			URL:      fmt.Sprintf("https://mega.nz/file/AAAAAAA%d#k", i),
+			Handle:   fmt.Sprintf("h%d", i),
+			LinkType: "file",
+			Name:     fmt.Sprintf("dl%d", i),
+			DestPath: filepath.Join(app.cfg.DownloadDir, fmt.Sprintf("dl%d", i)),
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.reload()
+	if len(m.rows) != 20 {
+		t.Fatalf("rows = %d, want 20", len(m.rows))
+	}
+	m.cursor, m.paneHeight = 3, 7 // the list pane has no title line
+
+	m.update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.cursor != 10 {
+		t.Fatalf("cursor after page down = %d, want 10", m.cursor)
+	}
+
+	m.update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.cursor != 3 {
+		t.Fatalf("cursor after page up = %d, want 3", m.cursor)
+	}
+
+	for range 3 {
+		m.update(tea.KeyMsg{Type: tea.KeyPgUp})
+	}
+	if m.cursor != 0 {
+		t.Fatalf("cursor after paging past the top = %d, want first row 0", m.cursor)
+	}
+
+	for range 4 {
+		m.update(tea.KeyMsg{Type: tea.KeyPgDown})
+	}
+	if m.cursor != 19 {
+		t.Fatalf("cursor after paging past the end = %d, want last row 19", m.cursor)
+	}
+}
+
 func TestPageKeysClampFilePaneCursor(t *testing.T) {
 	m := downloadsModel{
 		pane:       paneFiles,

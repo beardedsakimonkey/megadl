@@ -458,6 +458,10 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 			m.cursor++
 			m.loadFiles()
 		}
+	case "pgup":
+		m.moveCursor(-m.listPageSize())
+	case "pgdown":
+		m.moveCursor(m.listPageSize())
 	case "enter":
 		m.toggleDownload()
 	case "o":
@@ -768,6 +772,25 @@ func (m *downloadsModel) moveTreeCursor(delta int) {
 		return
 	}
 	m.treeCursor = min(max(m.treeCursor+delta, 0), len(m.tree)-1)
+}
+
+// moveCursor moves the list-pane cursor by rows, clamping at either end, and
+// reloads the file pane when the selected download changes.
+func (m *downloadsModel) moveCursor(delta int) {
+	if len(m.rows) == 0 {
+		return
+	}
+	i := min(max(m.cursor+delta, 0), len(m.rows)-1)
+	if i == m.cursor {
+		return
+	}
+	m.cursor = i
+	m.loadFiles()
+}
+
+// listPageSize is a page of the downloads pane, which has no title line.
+func (m *downloadsModel) listPageSize() int {
+	return max(1, m.paneHeight)
 }
 
 func (m *downloadsModel) treePageSize() int {
