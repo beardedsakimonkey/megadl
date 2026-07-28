@@ -71,6 +71,9 @@ type downloadsModel struct {
 
 	refreshing bool // remote listing fetch in flight
 	notice     string
+	// noticeErr renders the current notice as a failure. Set it only through
+	// setNotice/setNoticeErr so a later success notice can't inherit the red.
+	noticeErr bool
 	// quotaDismissed remembers that esc hid the quota banner. It covers the
 	// one stall that was showing then: the engine keeps reporting a stall
 	// until bytes move again, and once they do the next stall is news and
@@ -365,14 +368,25 @@ func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+// setNotice shows text in the footer's notice line, styled as an ordinary
+// message. Empty text clears the line.
+func (m *downloadsModel) setNotice(text string) {
+	m.notice, m.noticeErr = text, false
+}
+
+// setNoticeErr shows text in the same line, styled as a failure.
+func (m *downloadsModel) setNoticeErr(text string) {
+	m.notice, m.noticeErr = text, true
+}
+
 func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 	if res, ok := msg.(listingMergedMsg); ok {
 		m.refreshing = false
 		if res.err != nil {
-			m.notice = "refresh failed: " + res.err.Error()
+			m.setNotice("refresh failed: " + res.err.Error())
 		} else {
 			m.reload()
-			m.notice = fmt.Sprintf("listing refreshed — %d new file(s)", res.added)
+			m.setNotice(fmt.Sprintf("listing refreshed — %d new file(s)", res.added))
 		}
 		return nil
 	}
@@ -380,11 +394,11 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 	if res, ok := msg.(fileOpenedMsg); ok {
 		switch {
 		case res.err != nil:
-			m.notice = "play failed: " + res.err.Error()
+			m.setNoticeErr("play failed: " + res.err.Error())
 		case res.queued > 0:
-			m.notice = fmt.Sprintf("playing %s (+%d queued)", res.name, res.queued)
+			m.setNotice(fmt.Sprintf("playing %s (+%d queued)", res.name, res.queued))
 		default:
-			m.notice = "playing " + res.name
+			m.setNotice("playing " + res.name)
 		}
 		return nil
 	}
@@ -404,7 +418,7 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 		m.dismissDetail()
 		return nil
 	}
-	m.notice = ""
+	m.setNotice("")
 
 	if key.String() == "R" {
 		return m.refreshListing()
@@ -503,7 +517,7 @@ func (m *downloadsModel) focusHead() {
 	}
 	last, err := m.app.db.LastCompletedFile()
 	if err != nil || last == nil || !m.focusFile(last.DownloadID, last) {
-		m.notice = "queue is empty"
+		m.setNotice("queue is empty")
 	}
 }
 
@@ -536,7 +550,7 @@ func (m *downloadsModel) focusFile(downloadID int64, file *db.File) bool {
 // row's error is left alone: it describes the row rather than the moment, and
 // it goes away with the selection.
 func (m *downloadsModel) dismissDetail() {
-	m.notice = ""
+	m.setNotice("")
 	if m.app == nil || m.app.eng == nil {
 		return
 	}
@@ -576,7 +590,7 @@ func (m *downloadsModel) toggleDownload() {
 	case m.queued(dl):
 		m.app.eng.Dequeue(dl.ID)
 	case m.complete(dl):
-		m.notice = "download already complete"
+		m.setNotice("download already complete")
 	default:
 		m.app.eng.Enqueue(dl.ID)
 	}
@@ -627,7 +641,7 @@ func allQueued(files []db.File) bool {
 func (m *downloadsModel) toggleFolder() {
 	files := m.eligibleFiles(m.treeCursor)
 	if len(files) == 0 {
-		m.notice = "folder already downloaded"
+		m.setNotice("folder already downloaded")
 		return
 	}
 	ids := make([]int64, len(files))
@@ -652,7 +666,7 @@ func (m *downloadsModel) toggleFile() {
 	f := m.files[i]
 	switch {
 	case f.Status == db.FileDone || f.Status == db.FileSkipped:
-		m.notice = "file already downloaded"
+		m.setNotice("file already downloaded")
 	case f.Queued:
 		m.app.eng.DequeueFile(f.ID)
 		m.reload()
@@ -670,7 +684,7 @@ func (m *downloadsModel) startRename() tea.Cmd {
 	}
 	dl := m.rows[m.cursor]
 	if dl.ID == m.app.eng.ActiveID() {
-		m.notice = "stop the download before renaming it"
+		m.setNotice("stop the download before renaming it")
 		return nil
 	}
 	m.app.rename = newRenameModel(m.app, dl)
@@ -684,7 +698,7 @@ func (m *downloadsModel) startDelete() {
 	}
 	dl := m.rows[m.cursor]
 	if dl.ID == m.app.eng.ActiveID() {
-		m.notice = "stop the download before deleting it"
+		m.setNotice("stop the download before deleting it")
 		return
 	}
 	m.app.del = newDeleteModel(m.app, dl)
@@ -711,7 +725,7 @@ func (m *downloadsModel) mouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	// a click anywhere clears the notice, like any other key
-	m.notice = ""
+	m.setNotice("")
 
 	if inFiles {
 		return m.clickFile(msg.Y)
@@ -813,15 +827,15 @@ func (m *downloadsModel) refreshListing() tea.Cmd {
 	}
 	dl := *m.rows[m.cursor]
 	if dl.LinkType != "folder" {
-		m.notice = "file links have no folder listing"
+		m.setNotice("file links have no folder listing")
 		return nil
 	}
 	if m.refreshing {
-		m.notice = "refresh already in progress"
+		m.setNotice("refresh already in progress")
 		return nil
 	}
 	m.refreshing = true
-	m.notice = "refreshing remote listing…"
+	m.setNotice("refreshing remote listing…")
 
 	drv, database := m.app.drv, m.app.db
 	return func() tea.Msg {
@@ -872,7 +886,7 @@ func (m *downloadsModel) playFirst(idx []int) tea.Cmd {
 			return m.playFrom(i)
 		}
 	}
-	m.notice = "nothing to play is on disk yet"
+	m.setNotice("nothing to play is on disk yet")
 	return nil
 }
 
@@ -984,16 +998,16 @@ func findMPV() string {
 
 func (m *downloadsModel) copyURL(url string) {
 	if runtime.GOOS != "darwin" {
-		m.notice = "clipboard copy only implemented on macOS"
+		m.setNotice("clipboard copy only implemented on macOS")
 		return
 	}
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(url)
 	if err := cmd.Run(); err != nil {
-		m.notice = "pbcopy failed: " + err.Error()
+		m.setNotice("pbcopy failed: " + err.Error())
 		return
 	}
-	m.notice = "url copied"
+	m.setNotice("url copied")
 }
 
 func (m *downloadsModel) help() string {
@@ -1532,7 +1546,11 @@ func (m *downloadsModel) detailView(width int) string {
 	}
 
 	if m.notice != "" {
-		lines = append(lines, " "+styleNotice.Render(m.notice))
+		style := styleNotice
+		if m.noticeErr {
+			style = styleError
+		}
+		lines = append(lines, " "+style.Render(m.notice))
 	}
 	return strings.Join(lines, "\n")
 }

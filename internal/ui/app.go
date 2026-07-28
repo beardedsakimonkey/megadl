@@ -224,7 +224,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the queue is paused as a whole, so this ignores the cursor
 			// and acts on whatever the status bar is showing
 			a.eng.SetPaused(!a.eng.Paused())
-			a.downloads.notice = ""
+			a.downloads.setNotice("")
 			return a, nil
 		}
 	}

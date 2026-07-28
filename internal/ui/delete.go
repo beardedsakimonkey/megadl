@@ -42,7 +42,7 @@ func (m *deleteModel) update(msg tea.Msg) (*deleteModel, tea.Cmd) {
 			return m, nil
 		}
 		m.app.downloads.reload()
-		m.app.downloads.notice = "deleted " + m.dl.Name
+		m.app.downloads.setNotice("deleted " + m.dl.Name)
 		return nil, nil
 	}
 	// anything else cancels: the destructive half needs a deliberate key

@@ -481,9 +481,9 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 		case "enter":
 			m.app.downloads.selectDownload(m.existing.ID)
 			if m.existing.LinkType == "folder" {
-				m.app.downloads.notice = "reusing existing download — press R to refresh its listing"
+				m.app.downloads.setNotice("reusing existing download — press R to refresh its listing")
 			} else {
-				m.app.downloads.notice = "reusing existing download"
+				m.app.downloads.setNotice("reusing existing download")
 			}
 			return nil, nil
 		}

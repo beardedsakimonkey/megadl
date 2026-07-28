@@ -62,7 +62,7 @@ func (m *renameModel) update(msg tea.Msg) (*renameModel, tea.Cmd) {
 			return m, nil
 		}
 		m.app.downloads.reload()
-		m.app.downloads.notice = "renamed to " + name
+		m.app.downloads.setNotice("renamed to " + name)
 		return nil, nil
 	}
 
