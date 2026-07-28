@@ -68,9 +68,8 @@ type downloadsModel struct {
 	// savedPane is the focus last written to the database, for the same reason.
 	savedPane paneID
 
-	confirmRemove bool // pending x confirmation for rows[cursor]
-	refreshing    bool // remote listing fetch in flight
-	notice        string
+	refreshing bool // remote listing fetch in flight
+	notice     string
 	// quotaDismissed remembers that esc hid the quota banner. It covers the
 	// one stall that was showing then: the engine keeps reporting a stall
 	// until bytes move again, and once they do the next stall is news and
@@ -381,17 +380,6 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	if m.confirmRemove {
-		m.confirmRemove, m.notice = false, ""
-		if key.String() == "y" || key.String() == "Y" {
-			if m.cursor < len(m.rows) {
-				m.app.db.DeleteDownload(m.rows[m.cursor].ID)
-				m.reload()
-			}
-		}
-		return nil
-	}
-
 	// esc only silences the detail strip: it never moves the selection, so
 	// dropping a message can't cost you your place. Every other key clears
 	// the notice as a side effect of acting.
@@ -460,13 +448,7 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 	case "r":
 		return m.startRename()
 	case "d":
-		if m.cursor < len(m.rows) {
-			if m.rows[m.cursor].ID == m.app.eng.ActiveID() {
-				m.notice = "stop the download before removing it"
-				break
-			}
-			m.confirmRemove = true
-		}
+		m.startDelete()
 	case "y":
 		if m.cursor < len(m.rows) {
 			m.copyURL(m.rows[m.cursor].URL)
@@ -659,6 +641,19 @@ func (m *downloadsModel) startRename() tea.Cmd {
 	return m.app.rename.init()
 }
 
+// startDelete opens the removal confirmation for the selected download.
+func (m *downloadsModel) startDelete() {
+	if m.cursor >= len(m.rows) {
+		return
+	}
+	dl := m.rows[m.cursor]
+	if dl.ID == m.app.eng.ActiveID() {
+		m.notice = "stop the download before deleting it"
+		return
+	}
+	m.app.del = newDeleteModel(m.app, dl)
+}
+
 // mouse routes a click or wheel notch to the pane under the pointer. Its
 // coordinates are body-relative, and the pane geometry is the one view
 // recorded on the last render.
@@ -679,8 +674,8 @@ func (m *downloadsModel) mouse(msg tea.MouseMsg) tea.Cmd {
 	if !leftPress(msg) {
 		return nil
 	}
-	// a click anywhere dismisses a pending removal, like any other key
-	m.notice, m.confirmRemove = "", false
+	// a click anywhere clears the notice, like any other key
+	m.notice = ""
 
 	if inFiles {
 		return m.clickFile(msg.Y)
@@ -1473,10 +1468,6 @@ func (m *downloadsModel) detailView(width int) string {
 		}
 	}
 
-	if m.confirmRemove && m.cursor < len(m.rows) {
-		lines = append(lines, " "+styleWarn.Render(fmt.Sprintf(
-			"remove %q from the list? files on disk are kept (y/n)", m.rows[m.cursor].Name)))
-	}
 	if m.notice != "" {
 		lines = append(lines, " "+styleNotice.Render(m.notice))
 	}

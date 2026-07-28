@@ -37,6 +37,7 @@ type App struct {
 	downloads downloadsModel
 	addlink   *addlinkModel
 	rename    *renameModel
+	del       *deleteModel
 
 	spinner  spinner.Model
 	spinning bool // spinner tick loop in flight
@@ -169,7 +170,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		msg.Y -= a.bodyTop
-		if a.rename != nil {
+		if a.rename != nil || a.del != nil {
 			return a, nil // a bare prompt has nothing to aim at
 		}
 		if a.addlink != nil {
@@ -189,6 +190,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a.rename != nil {
 		model, cmd := a.rename.update(msg)
 		a.rename = model
+		return a, cmd
+	}
+	if a.del != nil {
+		model, cmd := a.del.update(msg)
+		a.del = model
 		return a, cmd
 	}
 
@@ -246,6 +252,8 @@ func (a *App) View() string {
 		body = overlayCenter(body, dialog, a.width, bodyHeight)
 	case a.rename != nil:
 		body = overlayCenter(body, a.rename.view(), a.width, bodyHeight)
+	case a.del != nil:
+		body = overlayCenter(body, a.del.view(), a.width, bodyHeight)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
@@ -421,6 +429,8 @@ func (a *App) helpLine() string {
 		return a.addlink.help()
 	case a.rename != nil:
 		return a.rename.help()
+	case a.del != nil:
+		return a.del.help()
 	}
 	return a.downloads.help()
 }
