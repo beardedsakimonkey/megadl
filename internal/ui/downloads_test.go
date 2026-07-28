@@ -510,13 +510,13 @@ func TestFilesViewRendersDirectoryTree(t *testing.T) {
 		t.Fatalf("missing header or file row:\n%s", got)
 	}
 	// file rows are indented one level under their folder header; both sit
-	// past the pane gutter and the two-cell cursor column, which carries the
+	// past the pane divider and the two-cell cursor column, which carries the
 	// bar on the cursor row (S01E01 here) — a hairline, this pane being the
 	// blurred one
-	if !strings.HasPrefix(file, "│ "+cursorLevels[cursorThin-1]+"   "+queuedGlyph+" ") {
+	if !strings.HasPrefix(file, "│"+cursorLevels[cursorThin-1]+"   "+queuedGlyph+" ") {
 		t.Fatalf("file row is not indented under its folder: %q", file)
 	}
-	if !strings.HasPrefix(header, "│   Season 01/") {
+	if !strings.HasPrefix(header, "│  Season 01/") {
 		t.Fatalf("folder header misrendered: %q", header)
 	}
 	if len(lines) != 10 {

@@ -181,7 +181,7 @@ func TestBlurredPaneKeepsThinBar(t *testing.T) {
 		t.Fatalf("blurred list bar should rest thin:\n%s", list)
 	}
 	files := ansi.Strip(m.filesView(40, 4))
-	if !strings.Contains(files, "│ "+cursorLevels[cursorFull-1]+" ") {
+	if !strings.Contains(files, "│"+cursorLevels[cursorFull-1]+" ") {
 		t.Fatalf("focused file bar should rest full:\n%s", files)
 	}
 }

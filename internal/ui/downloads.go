@@ -1060,7 +1060,7 @@ func downloadPaneWidths(width int, hasFiles bool) (listW, filesW int) {
 	listW = width
 	if hasFiles && width > 60 {
 		listW = min(44, max(28, width*35/100))
-		filesW = width - listW - 2 // "│ " gutter
+		filesW = width - listW // includes the "│" divider column
 	}
 	return listW, filesW
 }
@@ -1199,7 +1199,7 @@ func (m *downloadsModel) filesView(width, height int) string {
 			haveBytes += m.partials[f.ID]
 		}
 	}
-	title := filesTitle(dl, completed, len(m.files), haveBytes, totalBytes, max(0, width-2))
+	title := filesTitle(dl, completed, len(m.files), haveBytes, totalBytes, max(0, width-1))
 	pausedFile := m.pausedFile(dl, snap)
 
 	rowH := height - 1 // title line
@@ -1242,7 +1242,7 @@ func (m *downloadsModel) filesView(width, height int) string {
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
-	gutter := styleDim.Render("│ ")
+	gutter := styleDim.Render("│")
 	for i := range lines {
 		lines[i] = gutter + lines[i]
 	}
@@ -1321,12 +1321,12 @@ func (m *downloadsModel) pausedFile(dl *db.Download, snap engine.Snapshot) int64
 // dirRowView renders a directory header. It is focusable like a file row, so
 // it carries the same cursor bar and tint when the cursor is on it.
 func (m *downloadsModel) dirRowView(r fileTreeRow, selected bool, width int) string {
-	name := truncate(r.dir+"/", max(1, width-4-2*r.depth))
+	name := truncate(r.dir+"/", max(1, width-3-2*r.depth))
 	line := m.cursorGutter(paneFiles, selected) +
 		strings.Repeat("  ", r.depth) + styleDim.Render(name)
 	if selected {
-		// width less the pane gutter filesView prepends
-		return tintRow(line, width-2)
+		// width less the pane divider filesView prepends
+		return tintRow(line, width-1)
 	}
 	return line
 }
@@ -1337,8 +1337,8 @@ func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Sna
 	active := fetching || paused
 
 	indent := strings.Repeat("  ", depth)
-	// the pane gutter (added by filesView) and the cursor column take 2 cells each
-	contentW := max(0, width-4-len(indent))
+	// the pane divider (added by filesView) takes one cell, the cursor column two
+	contentW := max(0, width-3-len(indent))
 
 	// marker(2) name progress(gap + bar + gap + percent) gap(2) size.
 	// In narrow panes the bar gives way to the name; the bar and percentage
@@ -1382,8 +1382,8 @@ func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Sna
 		fileMarker(st, m.app.spinFrame()) + " " + name + bar + "  " +
 		styleDim.Render(size) + padding
 	if selected {
-		// width less the pane gutter filesView prepends
-		return tintRow(line, width-2)
+		// width less the pane divider filesView prepends
+		return tintRow(line, width-1)
 	}
 	return line
 }
