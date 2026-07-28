@@ -38,6 +38,7 @@ type active struct {
 	proc    mega.Proc
 	sizes   map[string]int64 // local path -> size
 	doneSet map[string]bool  // local paths already done/skipped
+	handles map[string]bool  // node handles selected for this process
 
 	currentFile  string
 	currentPath  string
@@ -188,9 +189,13 @@ func (e *Engine) maybeStart(ctx context.Context) {
 		id:      dl.ID,
 		sizes:   map[string]int64{},
 		doneSet: map[string]bool{},
+		handles: map[string]bool{},
 	}
 	for _, f := range files {
 		a.sizes[f.LocalPath] = f.Size
+		if f.Queued && f.Status == db.FilePending {
+			a.handles[f.NodeHandle] = true
+		}
 		if f.Status == db.FileDone || f.Status == db.FileSkipped {
 			a.doneSet[f.LocalPath] = true
 			a.completed += f.Size
@@ -319,8 +324,10 @@ func (e *Engine) finishLocked(a *active, exitErr error) {
 	case a.stopping, a.paused, a.requeue:
 		// no outcome to record: the queue already says what happens next
 	case a.gotEnd && a.endStatus == 0 && !a.fileFailed:
-		e.db.MarkCompleted(a.id, db.StatusDone)
-		e.db.DequeuePendingFiles(a.id)
+		if !e.hasQueuedFilesAddedAfterStart(a) {
+			e.db.MarkCompleted(a.id, db.StatusDone)
+			e.db.DequeuePendingFiles(a.id)
+		}
 	case a.quotaStalled:
 		// hold the queue here rather than hammering a closed door; the
 		// download keeps its place at the head
@@ -351,6 +358,22 @@ func (e *Engine) finishLocked(a *active, exitErr error) {
 
 	e.act = nil
 	e.Kick()
+}
+
+// hasQueuedFilesAddedAfterStart reports whether this process completed its
+// fixed selection while files queued during the run still need fetching. They
+// stay in the queue for the next process instead of interrupting this one.
+func (e *Engine) hasQueuedFilesAddedAfterStart(a *active) bool {
+	files, err := e.db.Files(a.id)
+	if err != nil {
+		return false
+	}
+	for _, f := range files {
+		if f.Queued && f.Status == db.FilePending && !a.handles[f.NodeHandle] {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) flush() {
@@ -441,12 +464,11 @@ func (e *Engine) DequeueFiles(fileIDs []int64) {
 }
 
 // QueueFile adds one file to the queue, which puts its download back in too.
-// An active process is restarted when its selection has to change.
 func (e *Engine) QueueFile(fileID int64) { e.QueueFiles([]int64{fileID}) }
 
 // QueueFiles adds a set of files to the queue, which puts their downloads back
-// in too. Like DequeueFiles it takes a folder in one go, so an active process
-// restarts once for the whole set instead of once per file.
+// in too. Files added to the active download wait for its current fixed
+// selection to finish, then run in a follow-up process.
 func (e *Engine) QueueFiles(fileIDs []int64) {
 	touched := map[int64]bool{} // downloads the set reaches into
 	changed := map[int64]bool{} // ...where a file's queue membership moved
@@ -473,10 +495,6 @@ func (e *Engine) QueueFiles(fileIDs []int64) {
 
 	e.mu.Lock()
 	act := e.act != nil && touched[e.act.id]
-	if act && !e.act.stopping && changed[e.act.id] {
-		e.act.requeue = true
-		e.act.proc.Stop()
-	}
 	e.mu.Unlock()
 
 	if !act {

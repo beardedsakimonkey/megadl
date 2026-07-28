@@ -17,12 +17,15 @@ import (
 type driverRun struct {
 	events      []mega.Event
 	waitForStop bool
+	waitAfter   int
+	release     <-chan struct{}
 }
 
 type fakeDriver struct {
 	mu      sync.Mutex
 	runs    []driverRun
 	started []mega.DownloadArgs
+	stops   int
 
 	// beforeStart, when set, runs as the numbered process is about to start,
 	// which is where a test can hold the engine between two runs.
@@ -57,15 +60,31 @@ func (d *fakeDriver) Start(ctx context.Context, args mega.DownloadArgs) (mega.Pr
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
-	proc := &fakeProc{events: make(chan mega.Event, 64), cancel: cancel}
+	proc := &fakeProc{
+		events: make(chan mega.Event, 64),
+		cancel: cancel,
+		onStop: func() {
+			d.mu.Lock()
+			d.stops++
+			d.mu.Unlock()
+		},
+	}
 	go func() {
 		defer close(proc.events)
-		for _, ev := range run.events {
+		for i, ev := range run.events {
 			select {
 			case proc.events <- ev:
 			case <-ctx.Done():
 				proc.events <- mega.ExitEvent{Err: ctx.Err()}
 				return
+			}
+			if run.release != nil && i+1 == run.waitAfter {
+				select {
+				case <-run.release:
+				case <-ctx.Done():
+					proc.events <- mega.ExitEvent{Err: ctx.Err()}
+					return
+				}
 			}
 		}
 		if run.waitForStop {
@@ -89,13 +108,23 @@ func (d *fakeDriver) startedArgs() []mega.DownloadArgs {
 	return out
 }
 
+func (d *fakeDriver) stopCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.stops
+}
+
 type fakeProc struct {
 	events chan mega.Event
 	cancel context.CancelFunc
+	onStop func()
 }
 
 func (p *fakeProc) Events() <-chan mega.Event { return p.events }
-func (p *fakeProc) Stop()                     { p.cancel() }
+func (p *fakeProc) Stop() {
+	p.onStop()
+	p.cancel()
+}
 
 func testDB(t *testing.T) *db.DB {
 	t.Helper()
@@ -496,36 +525,32 @@ func TestEngineDequeueFileRestartsWithReducedSelection(t *testing.T) {
 	}
 }
 
-// Queueing a file into the download that is already running restarts its
-// process, and the snapshot has to keep reporting the file it was fetching
-// across the gap between the two: to the UI an idle moment there reads as the
-// running file dropping back to "waiting".
-func TestEngineQueueFileKeepsActiveAcrossRestart(t *testing.T) {
+// Queueing an earlier file while another file is active must not preempt the
+// transfer in progress. The driver's selection is fixed, so the new file runs
+// in a second pass after the first one completes.
+func TestEngineQueueFileDoesNotPreemptActiveFile(t *testing.T) {
+	releaseFirst := make(chan struct{})
 	drv := newFakeDriver(
 		driverRun{
 			events: []mega.Event{
-				mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+				mega.FileStartEvent{Path: "/fake/b.mkv", Remote: "/Root/b.mkv", Size: 50},
+				mega.FileDoneEvent{Path: "/fake/b.mkv"},
+				mega.EndEvent{Status: 0},
 			},
-			waitForStop: true,
+			waitAfter: 1,
+			release:   releaseFirst,
 		},
 		driverRun{events: []mega.Event{
+			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
 			mega.FileDoneEvent{Path: "/fake/a.mkv"},
-			mega.FileDoneEvent{Path: "/fake/b.mkv"},
 			mega.EndEvent{Status: 0},
 		}},
 	)
-	starting, release := make(chan struct{}), make(chan struct{})
-	drv.beforeStart = func(index int) {
-		if index == 1 {
-			close(starting)
-			<-release
-		}
-	}
 
 	d := testDB(t)
 	id := insertDownload(t, d)
 	files, _ := d.Files(id)
-	d.SetFileQueued(files[1].ID, false) // b.mkv sits out of the first run
+	d.SetFileQueued(files[0].ID, false) // a.mkv sits above the active b.mkv
 	d.RecalcTotalBytes(id)
 
 	eng := New(drv, d)
@@ -535,33 +560,39 @@ func TestEngineQueueFileKeepsActiveAcrossRestart(t *testing.T) {
 	eng.Kick()
 
 	deadline := time.Now().Add(10 * time.Second)
-	for eng.Snapshot().CurrentFile != "a.mkv" {
+	for eng.Snapshot().CurrentFile != "b.mkv" {
 		if time.Now().After(deadline) {
 			t.Fatal("first run never reached file_start")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	eng.QueueFile(files[1].ID)
-	<-starting // the first process is gone; the second has not started
-
-	if snap := eng.Snapshot(); snap.ActiveID != id || snap.CurrentFile != "a.mkv" || snap.CurrentPath != "/fake/a.mkv" {
-		t.Errorf("snapshot mid-restart = %+v, want a.mkv still running under %d", snap, id)
+	eng.QueueFile(files[0].ID)
+	if got := drv.stopCount(); got != 0 {
+		t.Fatalf("queueing a.mkv stopped the active process %d time(s)", got)
 	}
-	if got := eng.ActiveID(); got != id {
-		t.Errorf("ActiveID mid-restart = %d, want %d", got, id)
+	if snap := eng.Snapshot(); snap.ActiveID != id || snap.CurrentFile != "b.mkv" || snap.CurrentPath != "/fake/b.mkv" {
+		t.Errorf("snapshot after queueing a.mkv = %+v, want b.mkv still active under %d", snap, id)
 	}
-	close(release)
 
+	close(releaseFirst)
 	waitStatus(t, d, id, db.StatusDone)
-	if snap := eng.Snapshot(); snap.ActiveID != 0 {
-		t.Errorf("restart state outlived the run: %+v", snap)
+
+	started := drv.startedArgs()
+	if len(started) != 2 {
+		t.Fatalf("driver started %d times, want 2: %+v", len(started), started)
+	}
+	if want := []string{"h2"}; !reflect.DeepEqual(started[0].SelectHandles, want) {
+		t.Errorf("first run selection = %v, want %v", started[0].SelectHandles, want)
+	}
+	if want := []string{"h1"}; !reflect.DeepEqual(started[1].SelectHandles, want) {
+		t.Errorf("second run selection = %v, want %v", started[1].SelectHandles, want)
 	}
 }
 
-// A restart the queue never gets to make — the user pauses in the gap — has to
-// let go of the download it was standing in for, or the pause draws as a run.
-func TestEnginePauseDuringRestartClearsActive(t *testing.T) {
+// Queueing another file while the queue is paused must not make the stopped
+// download appear active again.
+func TestEngineQueueFileWhilePausedKeepsActiveClear(t *testing.T) {
 	drv := newFakeDriver(driverRun{
 		events: []mega.Event{
 			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
@@ -589,8 +620,6 @@ func TestEnginePauseDuringRestartClearsActive(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Pause first: the restart's Kick then finds a held queue, and the second
-	// run never happens — the driver has no run left to give it.
 	eng.SetPaused(true)
 	eng.QueueFile(files[1].ID)
 
