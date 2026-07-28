@@ -302,8 +302,10 @@ func (a *App) sparkView() string {
 		sparkline(a.spark, sparkFull, quotaStyle(a.quota6h))
 }
 
-// footerView draws everything under the panes, all of it hanging off one
-// divider: notices first, then the transfer strip, then the shortcuts.
+// footerView draws everything under the panes: notices and the transfer strip
+// sit in a band of their own, fenced off by the pane rule above and a second
+// rule below, with the shortcuts under it. With nothing to fence the band
+// collapses and the shortcuts hang straight off the pane rule.
 func (a *App) footerView() string {
 	line := a.helpLine()
 	if pad := (a.width - lipgloss.Width(line)) / 2; pad > 0 {
@@ -316,6 +318,9 @@ func (a *App) footerView() string {
 	}
 	if bar := a.statusbarView(); bar != "" {
 		parts = append(parts, bar)
+	}
+	if len(parts) > 1 {
+		parts = append(parts, styleDim.Render(strings.Repeat("─", max(1, a.width))))
 	}
 	return strings.Join(append(parts, line), "\n")
 }
@@ -383,10 +388,11 @@ func statusbarLine(snap engine.Snapshot, marker string, width int) string {
 	const rateW = len("1023.9 KiB/s")
 	rate := fmt.Sprintf("%*s", rateW, humanRate(snap.Rate))
 
-	// " ⠋ name  ████░░ 42%  12.4 / 30.0 MiB  3.4 MiB/s ". Every field
-	// after the bar has a constant width so the bar never shifts as the
-	// numbers tick. In narrow terminals the byte counts give way to the
-	// name, then the rate, then the bar shrinks.
+	// " ⠋ name  ███▌░░ 42%  12.4 / 30.0 MiB  3.4 MiB/s ", with the ░ cells
+	// drawn as blocks in the track color. Every field after the bar has a
+	// constant width so the bar never shifts as the numbers tick. In narrow
+	// terminals the byte counts give way to the name, then the rate, then
+	// the bar shrinks.
 	const minNameW = 12
 	barW := 20
 	stats := bytes + "  " + rate

@@ -74,10 +74,10 @@ func TestStatusbarShowsActiveFileProgress(t *testing.T) {
 		Rate:        2 << 20,
 	}
 
-	got := ansi.Strip(statusbarLine(snap, "⠋", 100))
+	line := statusbarLine(snap, "⠋", 100)
+	got := ansi.Strip(line)
 	for _, want := range []string{
 		"⠋ episode-01.mkv",
-		"█████░░░░░░░░░░░░░░░", // 25% of a 20-cell bar
 		" 25%",
 		" 25 / 100 B",
 		"2.0 MiB/s",
@@ -85,6 +85,13 @@ func TestStatusbarShowsActiveFileProgress(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("statusbar = %q, want %q", got, want)
 		}
+	}
+	// Fill and track differ only in color, so the bar has to be matched with
+	// its styling intact: 25% of a 20-cell bar is five filled cells.
+	wantBar := styleProgress.Render(strings.Repeat("█", 5)) +
+		styleProgressTrack.Render(strings.Repeat("█", 15))
+	if !strings.Contains(line, wantBar) {
+		t.Fatalf("statusbar = %q, want bar %q", line, wantBar)
 	}
 }
 
@@ -97,7 +104,8 @@ func TestStatusbarBarStaysPutAsNumbersChange(t *testing.T) {
 			FileDone:    done,
 			Rate:        rate,
 		}
-		return strings.IndexAny(ansi.Strip(statusbarLine(snap, "⠋", 100)), "█░")
+		return strings.IndexAny(ansi.Strip(statusbarLine(snap, "⠋", 100)),
+			"█"+strings.Join(eighthBlocks[:], ""))
 	}
 
 	want := barAt(0, 0)
@@ -252,7 +260,7 @@ func TestStatusbarMarksHeldQueueHead(t *testing.T) {
 		t.Fatalf("statusbar = %q, want marker %q", plain, pausedGlyph)
 	}
 	wantBar := styleWarn.Render(strings.Repeat("█", 8)) +
-		styleDim.Render(strings.Repeat("░", 12))
+		styleProgressTrack.Render(strings.Repeat("█", 12))
 	if !strings.Contains(got, wantBar) {
 		t.Fatalf("statusbar = %q, want orange progress bar %q", got, wantBar)
 	}
@@ -419,7 +427,7 @@ func TestHeaderShowsAmountInLastSixHours(t *testing.T) {
 func TestSparklineMeasuresBarsAgainstAFixedCeiling(t *testing.T) {
 	const full = 5 << 30
 	got := sparkline([]int64{0, 1, full / 2, full - 1, full, 3 * full}, full, styleOK)
-	bar := styleOK.Background(colorSparkTrack)
+	bar := styleOK.Background(colorTrack)
 	want := styleSparkTrack.Render(" ") + bar.Render("▁") + bar.Render("▄") +
 		bar.Render("▇") + bar.Render("█") + bar.Render("█")
 	if got != want {
@@ -437,7 +445,7 @@ func TestSparklineMeasuresBarsAgainstAFixedCeiling(t *testing.T) {
 // download drew a full-height bar with nothing to compare it to.
 func TestSparklineKeepsAModestTransferLow(t *testing.T) {
 	got := sparkline([]int64{300 << 20}, sparkFull, styleOK)
-	if want := styleOK.Background(colorSparkTrack).Render("▁"); got != want {
+	if want := styleOK.Background(colorTrack).Render("▁"); got != want {
 		t.Fatalf("0.3 GiB bar = %q, want %q", got, want)
 	}
 }
@@ -482,11 +490,15 @@ func TestFooterDividerCarriesNoticesAndStrip(t *testing.T) {
 	if got := lines[0]; got != app.paneRule("┴") {
 		t.Fatalf("footer starts with %q, want the divider", ansi.Strip(got))
 	}
-	if len(lines) != 4 {
-		t.Fatalf("footer = %q, want divider, notice, strip and help", lines)
+	if len(lines) != 5 {
+		t.Fatalf("footer = %q, want divider, notice, strip, divider and help", lines)
 	}
 	if !strings.Contains(ansi.Strip(lines[1]), "copied url") {
 		t.Fatalf("footer line 1 = %q, want the notice", ansi.Strip(lines[1]))
+	}
+	// the strip is fenced below as well, so the shortcuts sit outside the band
+	if got := ansi.Strip(lines[3]); got != strings.Repeat("─", app.width) {
+		t.Fatalf("footer line 3 = %q, want the rule closing the strip", got)
 	}
 	if body := app.downloads.view(app.width, app.bodyHeight); strings.Contains(body, "copied url") {
 		t.Fatal("the notice belongs under the divider, not in the panes")

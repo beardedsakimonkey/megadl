@@ -23,7 +23,7 @@ import (
 
 func TestProgressBarUsesGreenProgressStyle(t *testing.T) {
 	got := progressBar(4, 0.5, false)
-	want := styleProgress.Render("██") + styleDim.Render("░░")
+	want := styleProgress.Render("██") + styleProgressTrack.Render("██")
 	if got != want {
 		t.Fatalf("progressBar() = %q, want %q", got, want)
 	}
@@ -31,9 +31,34 @@ func TestProgressBarUsesGreenProgressStyle(t *testing.T) {
 
 func TestPausedProgressBarUsesOrangeProgressStyle(t *testing.T) {
 	got := progressBar(4, 0.5, true)
-	want := styleWarn.Render("██") + styleDim.Render("░░")
+	want := styleWarn.Render("██") + styleProgressTrack.Render("██")
 	if got != want {
 		t.Fatalf("progressBar() = %q, want %q", got, want)
+	}
+}
+
+// The first bytes of a file must show up in the bar rather than waiting for a
+// whole cell's worth: a 20-cell bar only earns its first full block at 5%.
+// A partial cell carries the track as its background, so the fill can stop
+// mid-cell without the rest of that cell dropping out of the bar.
+func TestProgressBarFillsLeadingCellByEighths(t *testing.T) {
+	partial := styleProgress.Background(colorTrack)
+	for _, tc := range []struct {
+		frac float64
+		want string
+	}{
+		{0, styleProgressTrack.Render("████")},
+		{0.001, styleProgressTrack.Render("████")}, // below an eighth: still empty
+		{1.0 / 32, partial.Render("▏") + styleProgressTrack.Render("███")},
+		{0.125, partial.Render("▌") + styleProgressTrack.Render("███")},
+		{0.24, partial.Render("▉") + styleProgressTrack.Render("███")},
+		{0.25, styleProgress.Render("█") + styleProgressTrack.Render("███")},
+		{0.3, styleProgress.Render("█") + partial.Render("▏") + styleProgressTrack.Render("██")},
+		{1, styleProgress.Render("████") + styleProgressTrack.Render("")},
+	} {
+		if got := progressBar(4, tc.frac, false); got != tc.want {
+			t.Fatalf("progressBar(4, %v) = %q, want %q", tc.frac, got, tc.want)
+		}
 	}
 }
 
@@ -1838,23 +1863,26 @@ func TestSelectionIsRestoredInANewSession(t *testing.T) {
 	}
 }
 
-// The bar fills whole cells, so the percentage next to it has to round the
-// same way: a transfer one chunk short must not read "100%" beside a bar with
-// an empty cell left in it.
+// Both the bar and the percentage beside it round down, so a transfer one
+// chunk short must not read "100%" next to a bar that looks full. Fill and
+// track share a glyph now, so "full" is the whole rendered bar, colors and
+// all: near the end the shortfall shows up as a partial block on the track.
 func TestPercentTextNeverReadsCompleteBeforeTheBarFills(t *testing.T) {
+	full := progressBar(20, 1, false)
 	for _, frac := range []float64{0.996, 0.9999} {
 		if got := percentText(frac); got != " 99%" {
 			t.Fatalf("percentText(%v) = %q, want %q", frac, got, " 99%")
 		}
-		if bar := ansi.Strip(progressBar(20, frac, false)); !strings.Contains(bar, "░") {
-			t.Fatalf("progressBar(20, %v) = %q, want an unfilled cell", frac, bar)
+		if bar := progressBar(20, frac, false); bar == full {
+			t.Fatalf("progressBar(20, %v) = %q, want it short of full", frac, bar)
 		}
 	}
 	if got := percentText(1); got != "100%" {
 		t.Fatalf("percentText(1) = %q, want %q", got, "100%")
 	}
-	if bar := ansi.Strip(progressBar(20, 1, false)); strings.Contains(bar, "░") {
-		t.Fatalf("progressBar(20, 1) = %q, want it full", bar)
+	want := styleProgress.Render(strings.Repeat("█", 20)) + styleProgressTrack.Render("")
+	if full != want {
+		t.Fatalf("progressBar(20, 1) = %q, want %q", full, want)
 	}
 }
 

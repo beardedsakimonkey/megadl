@@ -9,9 +9,11 @@ import (
 )
 
 const (
-	colorPrimary    = lipgloss.Color("#FF3B30")
-	colorOrange     = lipgloss.Color("214")
-	colorSparkTrack = lipgloss.Color("237")
+	colorPrimary = lipgloss.Color("#FF3B30")
+	colorOrange  = lipgloss.Color("214")
+	// colorTrack is the unfilled remainder of any bar drawn as a solid
+	// block — the sparkline's track and the statusbar's progress bar.
+	colorTrack = lipgloss.Color("237")
 )
 
 var (
@@ -43,7 +45,14 @@ var (
 	// styleSparkTrack colors the sparkline's track. The track is a background,
 	// not a glyph, so the part of a cell a bar doesn't reach stays empty and
 	// the bars read as bars instead of blending into a texture.
-	styleSparkTrack = lipgloss.NewStyle().Background(colorSparkTrack)
+	styleSparkTrack = lipgloss.NewStyle().Background(colorTrack)
+
+	// styleProgressTrack draws the unfilled cells of the statusbar's progress
+	// bar. It paints a full block in the track color rather than a shade glyph
+	// so the track is a flat surface the fill can end part-way across: a
+	// partial cell covers its remainder with the same color as a background,
+	// which a dithered ░ neighbour could never match.
+	styleProgressTrack = lipgloss.NewStyle().Foreground(colorTrack)
 
 	styleModal = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).
 			BorderForeground(colorPrimary).Padding(1, 2)
@@ -82,7 +91,7 @@ const sparkLevels = "▁▂▃▄▅▆▇█"
 // and a bar's cell shows the track above it.
 func sparkline(buckets []int64, full int64, style lipgloss.Style) string {
 	levels := []rune(sparkLevels)
-	bar := style.Background(colorSparkTrack)
+	bar := style.Background(colorTrack)
 	var b strings.Builder
 	for _, v := range buckets {
 		if v <= 0 || full <= 0 {
@@ -215,25 +224,36 @@ func percentText(frac float64) string {
 	return fmt.Sprintf("%3d%%", int(frac*100))
 }
 
+// eighthBlocks covers 1/8 through 7/8 of a cell. Unicode draws these flush
+// with the cell's left edge, so a partial cell extends the bar rightward the
+// way a full one does instead of floating in the middle of its column.
+var eighthBlocks = [7]string{"▏", "▎", "▍", "▌", "▋", "▊", "▉"}
+
 // progressBar renders a fixed-width bar for frac in [0,1]. A paused transfer
-// uses the same orange as its pause marker.
+// uses the same orange as its pause marker. The leading cell is drawn at
+// eighth-of-a-cell resolution so a transfer that has just started reads as
+// moving rather than sitting empty until it has earned a whole cell.
+//
+// Fill and track are the same glyph in different colors, so the bar is one
+// unbroken strip: the partial cell only has to carry the track as its
+// background for the boundary between them to land mid-cell.
 func progressBar(width int, frac float64, paused bool) string {
 	if width < 2 {
 		return ""
 	}
-	if frac < 0 {
-		frac = 0
-	}
-	if frac > 1 {
-		frac = 1
-	}
-	filled := int(frac * float64(width))
+	frac = min(1, max(0, frac))
+	eighths := int(frac * float64(width) * 8)
+	filled, rem := eighths/8, eighths%8
 	filledStyle := styleProgress
 	if paused {
 		filledStyle = styleWarn
 	}
-	return filledStyle.Render(strings.Repeat("█", filled)) +
-		styleDim.Render(strings.Repeat("░", width-filled))
+	bar := filledStyle.Render(strings.Repeat("█", filled))
+	if rem > 0 {
+		bar += filledStyle.Background(colorTrack).Render(eighthBlocks[rem-1])
+		filled++
+	}
+	return bar + styleProgressTrack.Render(strings.Repeat("█", width-filled))
 }
 
 // fileProgressBar uses centered line glyphs so bars on adjacent file rows
