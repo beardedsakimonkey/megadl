@@ -59,6 +59,48 @@ var (
 			BorderForeground(colorPrimary).Padding(1, 2)
 )
 
+// modalTitleFrame is what a titled top border spends on everything that isn't
+// the title: two corners, the dash before the label, a space either side of
+// it, and at least one dash after.
+const modalTitleFrame = 6
+
+// renderModal frames body in styleModal with title set into the top border
+// rather than written on the first body row:
+//
+//	┌─ Rename download ──────────┐
+//
+// The frame never comes out narrower than the title needs up there, so a
+// dialog with a short body still shows its whole heading.
+func renderModal(title, body string) string {
+	// Everything modalTitleFrame accounts for except one dash is already paid
+	// for by the frame's own border and padding, so only the remainder has to
+	// come out of the content width.
+	need := lipgloss.Width(title) + modalTitleFrame - styleModal.GetHorizontalFrameSize()
+	inner := max(lipgloss.Width(body), need)
+	box := styleModal.Width(inner + styleModal.GetHorizontalPadding()).Render(body)
+
+	lines := strings.Split(box, "\n")
+	lines[0] = modalTopBorder(title, lipgloss.Width(lines[0]))
+	return strings.Join(lines, "\n")
+}
+
+// modalTopBorder draws a width-cell top border carrying title. The border
+// keeps the modal's color and the title the heading's, so the label reads as
+// text sitting in the rule rather than as part of it.
+func modalTopBorder(title string, width int) string {
+	border := lipgloss.NormalBorder()
+	edge := lipgloss.NewStyle().Foreground(colorPrimary)
+	dashes := func(n int) string { return strings.Repeat(border.Top, max(0, n)) }
+	if title == "" || width < modalTitleFrame {
+		return edge.Render(border.TopLeft + dashes(width-2) + border.TopRight)
+	}
+	title = truncate(title, width-modalTitleFrame)
+	fill := width - modalTitleFrame - lipgloss.Width(title) + 1
+	return edge.Render(border.TopLeft+border.Top) +
+		" " + styleTitle.Render(title) + " " +
+		edge.Render(dashes(fill)+border.TopRight)
+}
+
 // quotaLimit is roughly what MEGA's free tier allows over the 6h window.
 const quotaLimit = 5 << 30
 

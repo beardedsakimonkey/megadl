@@ -54,6 +54,40 @@ func TestPrimaryStylesUseMegaRed(t *testing.T) {
 	}
 }
 
+func TestRenderModalPutsTitleInTopBorder(t *testing.T) {
+	got := ansi.Strip(renderModal("Delete download", "some name\nsecond line"))
+	lines := strings.Split(got, "\n")
+
+	if want := "┌─ Delete download ─"; !strings.HasPrefix(lines[0], want) {
+		t.Fatalf("top border = %q, want prefix %q", lines[0], want)
+	}
+	if !strings.HasSuffix(lines[0], "─┐") {
+		t.Fatalf("top border = %q, want it to close with the corner", lines[0])
+	}
+	if strings.Contains(strings.Join(lines[1:], "\n"), "Delete download") {
+		t.Fatalf("title repeated in the body:\n%s", got)
+	}
+	for i, line := range lines {
+		if w := lipgloss.Width(line); w != lipgloss.Width(lines[0]) {
+			t.Fatalf("line %d width = %d, want %d:\n%s", i, w, lipgloss.Width(lines[0]), got)
+		}
+	}
+}
+
+// A dialog whose body is narrower than its heading still has to show the whole
+// heading: the frame grows to the title rather than cropping it.
+func TestRenderModalWidensForLongTitle(t *testing.T) {
+	const title = "A title much wider than this dialog's body"
+	got := ansi.Strip(renderModal(title, "ok"))
+	lines := strings.Split(got, "\n")
+	if !strings.Contains(lines[0], title) {
+		t.Fatalf("top border = %q, want it to carry %q", lines[0], title)
+	}
+	if !strings.HasSuffix(lines[0], "─┐") {
+		t.Fatalf("top border = %q, want a dash before the corner", lines[0])
+	}
+}
+
 // The cursor row's tint has to survive the resets that the row's own
 // foreground styles emit, or the band ends at the first colored segment.
 func TestArmBackgroundReopensAfterNestedResets(t *testing.T) {

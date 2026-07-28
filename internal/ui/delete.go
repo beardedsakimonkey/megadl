@@ -96,12 +96,11 @@ func (m *deleteModel) view() string {
 		noun = "file"
 	}
 	w := m.width
-	body := styleTitle.Render("Delete download") + "\n\n" +
-		truncateMiddle(m.dl.Name, w) + "\n\n" +
+	body := truncateMiddle(m.dl.Name, w) + "\n\n" +
 		styleWarn.Render(wrap("this deletes the "+noun+" from disk:", w)) + "\n" +
 		styleDim.Render(truncateMiddle(m.dl.DestPath, w))
 	if m.errMsg != "" {
 		body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
 	}
-	return styleModal.Render(body)
+	return renderModal("Delete download", body)
 }

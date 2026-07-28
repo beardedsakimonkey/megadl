@@ -332,13 +332,15 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 // pickerVisible is how many picker rows the modal shows; the scroll math and
 // the renderer have to agree on it or the cursor can drift out of view.
 func (m *addlinkModel) pickerVisible() int {
-	return max(3, m.app.height-12)
+	// two rows fewer of chrome than before the title moved into the border,
+	// so the list keeps the same margin around it and gains those two rows
+	return max(3, m.app.height-10)
 }
 
 // pickerRowsTop is the body row the picker's first entry renders on: the
-// modal's border and padding, then the title and the blank line under it.
+// modal's border — which carries the title — and its top padding.
 func (m *addlinkModel) pickerRowsTop() int {
-	return m.modal.y + styleModal.GetBorderTopSize() + styleModal.GetPaddingTop() + 2
+	return m.modal.y + styleModal.GetBorderTopSize() + styleModal.GetPaddingTop()
 }
 
 // pickerRowAt maps body coordinates onto a picker row index, or -1 when the
@@ -682,10 +684,10 @@ func (m *addlinkModel) help() string {
 
 func (m *addlinkModel) view() string {
 	w := m.width
-	var body string
+	var title, body string
 	switch m.state {
 	case stateURL:
-		body = styleTitle.Render("Add mega.nz link") + "\n\n" + m.urlInputView()
+		title, body = "Add mega.nz link", m.urlInputView()
 		if m.errMsg != "" {
 			body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
 		}
@@ -695,14 +697,14 @@ func (m *addlinkModel) view() string {
 		prompt := m.urlInput.PromptStyle.Render(m.urlInput.Prompt)
 		width := m.urlInput.Width + 1
 		frame := m.decodeFrameView(width)
-		body = styleTitle.Render("Add mega.nz link") + "\n\n" +
-			prompt + lipgloss.NewStyle().Width(width).Render(frame)
+		title = "Add mega.nz link"
+		body = prompt + lipgloss.NewStyle().Width(width).Render(frame)
 	case stateListing:
-		body = styleTitle.Render("Add mega.nz link") + "\n\n" +
-			m.spin.View() + " fetching listing…\n" + styleDim.Render(truncateMiddle(m.url, w))
+		title = "Add mega.nz link"
+		body = m.spin.View() + " fetching listing…\n" +
+			styleDim.Render(truncateMiddle(m.url, w))
 	case statePicker:
-		body = styleTitle.Render("Choose files") + "\n\n" +
-			m.picker.view(m.pickerW, m.pickerVisible())
+		title, body = "Choose files", m.picker.view(m.pickerW, m.pickerVisible())
 		if m.errMsg != "" {
 			body += "\n" + styleError.Render(wrap(m.errMsg, w))
 		}
@@ -712,28 +714,28 @@ func (m *addlinkModel) view() string {
 			count, bytes = m.picker.totals()
 		}
 		summary := fmt.Sprintf("%d file(s), %s → ", count, humanBytes(bytes))
-		body = styleTitle.Render("Name already taken") + "\n\n" +
-			m.nameInput.View() + "\n\n" +
+		title = "Name already taken"
+		body = m.nameInput.View() + "\n\n" +
 			styleDim.Render(summary+truncateMiddle(m.app.cfg.DownloadDir,
 				max(8, w-lipgloss.Width(summary)-1))+"/")
 		if m.errMsg != "" {
 			body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
 		}
 	case stateExisting:
-		body = styleTitle.Render("Already in library") + "\n\n" +
-			wrap(fmt.Sprintf("%q already represents this MEGA %s.",
-				m.existing.Name, m.existing.LinkType), w) + "\n\n" +
+		title = "Already in library"
+		body = wrap(fmt.Sprintf("%q already represents this MEGA %s.",
+			m.existing.Name, m.existing.LinkType), w) + "\n\n" +
 			styleDim.Render(fmt.Sprintf("%s  %s\n%s",
 				m.existing.Status,
 				humanBytes(m.existing.TotalBytes),
 				truncateMiddle(m.existing.DestPath, w))) +
 			"\n\n" + wrap("Reuse this download instead of creating another copy?", w)
 	case stateFailed:
-		body = styleTitle.Render("Listing failed") + "\n\n" +
-			styleError.Render(wrap(m.errMsg, w)) + "\n\n" +
+		title = "Listing failed"
+		body = styleError.Render(wrap(m.errMsg, w)) + "\n\n" +
 			styleDim.Render(wrap("press any key to edit the link, esc to close", w))
 	}
-	return styleModal.Render(body)
+	return renderModal(title, body)
 }
 
 func (m *addlinkModel) decodeFrameView(width int) string {

@@ -129,11 +129,10 @@ func (m *renameModel) help() string {
 
 func (m *renameModel) view() string {
 	w := m.width
-	body := styleTitle.Render("Rename download") + "\n\n" +
-		m.input.View() + "\n\n" +
+	body := m.input.View() + "\n\n" +
 		styleDim.Render(truncateMiddle(filepath.Dir(m.dl.DestPath), w-1)+string(filepath.Separator))
 	if m.errMsg != "" {
 		body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
 	}
-	return styleModal.Render(body)
+	return renderModal("Rename download", body)
 }
