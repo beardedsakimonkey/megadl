@@ -197,7 +197,7 @@ func (p *pickerModel) view(width, height int) string {
 		if row.node.IsDir() {
 			name += "/"
 		}
-		line := fmt.Sprintf("%s%s%s %s", cursorBar(i == p.cursor, true),
+		line := fmt.Sprintf("%s%s%s %s", cursorBar(i == p.cursor, true, cursorFull),
 			strings.Repeat("  ", row.depth), box,
 			truncate(name, max(10, width-22-2*row.depth)))
 		if !row.node.IsDir() {

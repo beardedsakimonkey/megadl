@@ -108,17 +108,31 @@ func sparkline(buckets []int64, full int64, style lipgloss.Style) string {
 	return b.String()
 }
 
+// cursorLevels are the widths the cursor bar is drawn at, thinnest first: the
+// eighth blocks the progress bar fills its leading cell with, plus the full
+// cell. A pane's bar rests at one end or the other and travels through the
+// rest when focus moves.
+var cursorLevels = [8]string{"▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
+
+const (
+	cursorThin = 1
+	cursorFull = len(cursorLevels)
+)
+
 // cursorBar is the two-cell left gutter that marks the cursor row: an accent
 // bar in the focused pane, dim for the remembered row of an unfocused one,
-// blank elsewhere. Its width is constant so rows never shift.
-func cursorBar(selected, focused bool) string {
+// blank elsewhere. level picks its width. The gutter's own width is constant
+// whatever the bar is doing, so rows never shift.
+func cursorBar(selected, focused bool, level int) string {
 	if !selected {
 		return "  "
 	}
+	level = min(cursorFull, max(cursorThin, level))
+	style := styleDim
 	if focused {
-		return styleCursor.Render("█") + " "
+		style = styleCursor
 	}
-	return styleDim.Render("█") + " "
+	return style.Render(cursorLevels[level-1]) + " "
 }
 
 // tintRow lays styleRowTint's background under a line that is already styled,

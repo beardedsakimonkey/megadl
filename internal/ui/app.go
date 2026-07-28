@@ -154,6 +154,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.refreshQuota()
 		return a, tea.Batch(tickCmd(), a.spinCmd())
 
+	case cursorTickMsg:
+		// Answered ahead of the modal flows below: a dialog opened while the
+		// bars are still travelling would otherwise swallow the tick and strand
+		// the loop, leaving the bars stuck at half width behind it.
+		return a, a.downloads.cursorTick()
+
 	case spinner.TickMsg:
 		if !a.downloading() {
 			a.spinning = false

@@ -25,6 +25,7 @@ type paneID int
 const (
 	paneList paneID = iota
 	paneFiles
+	paneCount
 )
 
 type downloadsModel struct {
@@ -75,6 +76,12 @@ type downloadsModel struct {
 	// until bytes move again, and once they do the next stall is news and
 	// speaks up. reload clears it.
 	quotaDismissed bool
+
+	// cursorAnims animates each pane's cursor bar when focus moves between
+	// them; the zero value is a bar at rest at whatever width its pane calls
+	// for. cursorTicking says a repaint loop is already in flight.
+	cursorAnims   [paneCount]cursorAnim
+	cursorTicking bool
 
 	// Pane geometry recorded by view so mouse events can be mapped back
 	// onto rows; coordinates are relative to the top-left of the body.
@@ -343,7 +350,17 @@ func (m *downloadsModel) rememberFileCursor() {
 }
 
 func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
+	// Bar widths are read before the message is handled: once focus has moved,
+	// every bar reports the width its new pane calls for, and a bar has to set
+	// out from the one it was actually showing.
+	now := time.Now()
+	widths := m.cursorWidths(now)
+	pane := m.pane
+
 	cmd := m.handle(msg)
+	if m.pane != pane {
+		cmd = tea.Batch(cmd, m.startCursorAnim(widths, now))
+	}
 	m.rememberSelection()
 	return cmd
 }
@@ -1070,7 +1087,7 @@ func (m *downloadsModel) rowView(dl *db.Download, snap engine.Snapshot, selected
 	nameW := max(8, width-2-1-1-2)
 	name := truncate(dl.Name, nameW)
 
-	line := fmt.Sprintf("%s%s %s", cursorBar(selected, m.pane == paneList),
+	line := fmt.Sprintf("%s%s %s", m.cursorGutter(paneList, selected),
 		dlMarker(m.dlMarkerStateOf(dl, snap), spin), name)
 	if selected {
 		return tintRow(line, width)
@@ -1305,7 +1322,7 @@ func (m *downloadsModel) pausedFile(dl *db.Download, snap engine.Snapshot) int64
 // it carries the same cursor bar and tint when the cursor is on it.
 func (m *downloadsModel) dirRowView(r fileTreeRow, selected bool, width int) string {
 	name := truncate(r.dir+"/", max(1, width-4-2*r.depth))
-	line := cursorBar(selected, m.pane == paneFiles) +
+	line := m.cursorGutter(paneFiles, selected) +
 		strings.Repeat("  ", r.depth) + styleDim.Render(name)
 	if selected {
 		// width less the pane gutter filesView prepends
@@ -1361,7 +1378,7 @@ func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Sna
 		bar = "  " + fileProgressBar(barW, frac, active, paused) + " " + percentStyle.Render(percent)
 	}
 	st := fileMarkerStateOf(f, fetching, paused, frac)
-	line := cursorBar(selected, m.pane == paneFiles) + indent +
+	line := m.cursorGutter(paneFiles, selected) + indent +
 		fileMarker(st, m.app.spinFrame()) + " " + name + bar + "  " +
 		styleDim.Render(size) + padding
 	if selected {
