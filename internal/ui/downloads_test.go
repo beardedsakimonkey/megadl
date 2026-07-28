@@ -726,7 +726,7 @@ func TestOKeyWithNothingOnDiskShowsNotice(t *testing.T) {
 	}
 }
 
-func TestEnterOnListRowPlaysWholeFolder(t *testing.T) {
+func TestOKeyOnListRowPlaysWholeFolder(t *testing.T) {
 	dir := t.TempDir()
 	files := []db.File{
 		{LocalPath: filepath.Join(dir, "cover.jpg"), Status: db.FileDone, Queued: true},
@@ -742,9 +742,9 @@ func TestEnterOnListRowPlaysWholeFolder(t *testing.T) {
 	m.pane = paneList
 	m.treeCursor = 2 // the folder plays from its start, not from here
 
-	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	if cmd == nil {
-		t.Fatal("enter on a list row returned no command")
+		t.Fatal("o on a list row returned no command")
 	}
 	msg := cmd()
 	want := []string{filepath.Join(dir, "e1.mkv"), filepath.Join(dir, "e2.mkv")}
@@ -757,7 +757,7 @@ func TestEnterOnListRowPlaysWholeFolder(t *testing.T) {
 	}
 }
 
-func TestEnterOnListRowStartsAtPartialWhenNothingIsComplete(t *testing.T) {
+func TestOKeyOnListRowStartsAtPartialWhenNothingIsComplete(t *testing.T) {
 	dir := t.TempDir()
 	partial := filepath.Join(dir, ".megatmp.h1")
 	if err := os.WriteFile(partial, []byte("x"), 0o644); err != nil {
@@ -771,9 +771,9 @@ func TestEnterOnListRowStartsAtPartialWhenNothingIsComplete(t *testing.T) {
 	m.pane = paneList
 	m.partials = partialSizes(files)
 
-	cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	if cmd == nil {
-		t.Fatal("enter on a list row returned no command")
+		t.Fatal("o on a list row returned no command")
 	}
 	cmd()
 	if len(*opened) != 1 || (*opened)[0] != partial {
@@ -781,15 +781,15 @@ func TestEnterOnListRowStartsAtPartialWhenNothingIsComplete(t *testing.T) {
 	}
 }
 
-func TestEnterOnListRowWithNothingOnDiskNotices(t *testing.T) {
+func TestOKeyOnListRowWithNothingOnDiskNotices(t *testing.T) {
 	dir := t.TempDir()
 	m, opened := playerModel(t, []db.File{
 		{NodeHandle: "h1", LocalPath: filepath.Join(dir, "e1.mkv"), Status: db.FilePending, Queued: true},
 	})
 	m.pane = paneList
 
-	if cmd := m.update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
-		t.Fatalf("enter returned a command with nothing playable: %v", cmd())
+	if cmd := m.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}}); cmd != nil {
+		t.Fatalf("o returned a command with nothing playable: %v", cmd())
 	}
 	if len(*opened) != 0 {
 		t.Fatalf("opened files = %v, want none", *opened)
@@ -1159,13 +1159,13 @@ func TestOKeyOnFolderPlaysItsFirstFile(t *testing.T) {
 	}
 }
 
-func TestSKeyTogglesDownloadQueueMembership(t *testing.T) {
+func TestEnterTogglesDownloadQueueMembership(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	m := &app.downloads
 
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if queued(t, database, id) {
-		t.Fatal("download still queued after the first s")
+		t.Fatal("download still queued after the first enter")
 	}
 	files, _ := database.Files(id)
 	for _, f := range files {
@@ -1175,13 +1175,22 @@ func TestSKeyTogglesDownloadQueueMembership(t *testing.T) {
 	}
 
 	m.reload()
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !queued(t, database, id) {
-		t.Fatal("download not queued again after the second s")
+		t.Fatal("download not queued again after the second enter")
 	}
 }
 
-func TestSKeyOnCompletedDownloadNotices(t *testing.T) {
+func TestSKeyDoesNotToggleDownloadQueueMembership(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+
+	pressKey(&app.downloads, "s")
+	if !queued(t, database, id) {
+		t.Fatal("s removed the download from the queue")
+	}
+}
+
+func TestEnterOnCompletedDownloadNotices(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	// every file on disk, so there is nothing left to queue
 	for _, handle := range []string{"a", "b"} {
@@ -1195,7 +1204,7 @@ func TestSKeyOnCompletedDownloadNotices(t *testing.T) {
 	m := &app.downloads
 	m.reload()
 
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !strings.Contains(m.notice, "already complete") {
 		t.Fatalf("notice = %q, want already-complete notice", m.notice)
 	}
@@ -1257,7 +1266,7 @@ func TestQueueingWhilePausedExplainsItself(t *testing.T) {
 	m := &app.downloads
 	m.reload()
 
-	pressKey(m, "s")
+	m.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !queued(t, database, id) {
 		t.Fatal("download not queued")
 	}
