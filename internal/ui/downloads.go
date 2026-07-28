@@ -967,8 +967,8 @@ func (m *downloadsModel) help() string {
 	if m.pane == paneFiles {
 		return renderShortcuts(
 			shortcut{keys: []string{"j/k"}, label: "move"},
-			shortcut{keys: []string{"J/K"}, label: "sibling"},
-			shortcut{keys: []string{"⏎"}, label: m.toggleLabel() + " " + m.toggleNoun()},
+			shortcut{keys: []string{"J/K"}, label: "folder"},
+			shortcut{keys: []string{"⏎"}, label: m.toggleLabel()},
 			shortcut{keys: []string{"o"}, label: "open"},
 			shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
 			shortcut{keys: []string{"f"}, label: "focus"},
@@ -1023,14 +1023,6 @@ func (m *downloadsModel) toggleLabel() string {
 		return "unqueue"
 	}
 	return "queue"
-}
-
-// toggleNoun names what the enter toggle in the file pane would act on.
-func (m *downloadsModel) toggleNoun() string {
-	if m.treeCursor < len(m.tree) && m.tree[m.treeCursor].dir != "" {
-		return "folder"
-	}
-	return "file"
 }
 
 func (m *downloadsModel) view(width, height int) string {
