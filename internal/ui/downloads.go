@@ -424,6 +424,8 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 			m.treeCursor = siblingRow(m.tree, m.treeCursor, -1)
 		case "J":
 			m.treeCursor = siblingRow(m.tree, m.treeCursor, 1)
+		case "z":
+			m.centerTreeCursor()
 		case "enter":
 			m.toggleRow()
 		case "o":
@@ -944,6 +946,7 @@ func (m *downloadsModel) help() string {
 			shortcut{keys: []string{"R"}, label: "refresh listing"},
 			shortcut{keys: []string{"h"}, label: "back"},
 			shortcut{keys: []string{"q"}, label: "quit"},
+			shortcut{keys: []string{"z"}, label: "center"},
 		)
 	}
 	return renderShortcuts(
@@ -1209,6 +1212,16 @@ func (m *downloadsModel) filesView(width, height int) string {
 		lines[i] = gutter + lines[i]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// centerTreeCursor scrolls the file pane so its cursor sits halfway down the
+// rows below the title. It deliberately does not clamp the scroll to a full
+// final page: near the end of the tree, blank rows below are what let the
+// cursor remain centered.
+func (m *downloadsModel) centerTreeCursor() {
+	rowH := max(1, m.paneHeight-1) // title line
+	cursorRow := min(max(m.treeCursor, 0), max(0, len(m.tree)-1))
+	m.treeScroll = max(0, cursorRow-rowH/2)
 }
 
 // filesTitle keeps the selected folder name and file count on the left, and

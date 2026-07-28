@@ -1342,6 +1342,25 @@ func TestEscDismissesNoticeAndKeepsSelection(t *testing.T) {
 	}
 }
 
+func TestZCentersFilePaneCursor(t *testing.T) {
+	m := downloadsModel{
+		pane:       paneFiles,
+		tree:       make([]fileTreeRow, 20),
+		treeCursor: 12,
+		treeScroll: 10,
+		paneHeight: 8, // title plus seven file rows
+	}
+
+	pressKey(&m, "z")
+
+	if m.treeScroll != 9 {
+		t.Fatalf("tree scroll = %d, want 9 so cursor row 12 is centered in seven rows", m.treeScroll)
+	}
+	if m.treeCursor != 12 {
+		t.Fatalf("tree cursor = %d, want the selection left on row 12", m.treeCursor)
+	}
+}
+
 // stalledDriver reports a quota stall on the file it starts, then waits to be
 // stopped, so the engine keeps the stall in its snapshot the way a real 509
 // does.
