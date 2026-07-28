@@ -1575,10 +1575,16 @@ func TestFKeyJumpsToTheQueueHead(t *testing.T) {
 	if m.rows[m.cursor].ID == headID {
 		t.Fatal("cursor already on the queue head; the jump proves nothing")
 	}
+	if m.pane != paneList {
+		t.Fatal("test must start in the downloads pane")
+	}
 
 	pressKey(m, "f")
 	if got := m.rows[m.cursor].ID; got != headID {
 		t.Fatalf("cursor on download %d, want the queue head %d", got, headID)
+	}
+	if m.pane != paneFiles {
+		t.Fatalf("focused pane = %v, want the files pane", m.pane)
 	}
 	i := m.cursorFile()
 	if i < 0 {

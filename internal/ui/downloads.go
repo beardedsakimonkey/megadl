@@ -476,9 +476,8 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 }
 
 // focusHead moves the cursor to what the queue is working on: the download at
-// the front, and the file inside it being fetched or held at. It works from
-// either pane and leaves the focused pane where it is, so f is a jump rather
-// than a change of pane.
+// the front, and the file inside it being fetched or held at. A current file
+// is selected in the files pane regardless of which pane the jump started in.
 func (m *downloadsModel) focusHead() {
 	if m.head.dl == nil {
 		m.notice = "queue is empty"
@@ -497,6 +496,7 @@ func (m *downloadsModel) focusHead() {
 			// the running file is the point of the jump
 			m.cursorDir = ""
 			m.focusRow(m.head.file.ID)
+			m.pane = paneFiles
 		}
 		return
 	}
