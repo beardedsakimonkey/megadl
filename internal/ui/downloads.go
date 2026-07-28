@@ -1519,7 +1519,7 @@ const (
 	pausedGlyph  = "⏸︎" // the queue is held here
 	queuedGlyph  = "↓"  // waiting its turn
 	partialGlyph = "◔"  // some of it is on disk
-	emptyGlyph   = "•"  // none of it is
+	emptyGlyph   = "·"  // none of it is
 )
 
 // dlMarkerState is what a download's list marker depends on. head is the front
