@@ -704,3 +704,124 @@ func TestMigrationDropsStatusbarFileColumn(t *testing.T) {
 		t.Fatal("obsolete statusbar_file_id column still exists after migration")
 	}
 }
+
+// The 'f' key falls back to the newest file on disk when nothing is queued, so
+// the newest is the one that finished last — not the one with the highest id,
+// and never a file that was already there or is still pending.
+func TestLastCompletedFileIsTheNewestOne(t *testing.T) {
+	d := openTest(t)
+	first, err := d.InsertDownload(&Download{
+		URL: "a", Handle: "a", LinkType: "folder", Name: "First", DestPath: "/l/First",
+	}, []File{
+		{NodeHandle: "h1", RemotePath: "/First/a", LocalPath: "/l/First/a", Queued: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := d.InsertDownload(&Download{
+		URL: "b", Handle: "b", LinkType: "folder", Name: "Second", DestPath: "/l/Second",
+	}, []File{
+		{NodeHandle: "h2", RemotePath: "/Second/b", LocalPath: "/l/Second/b", Queued: true},
+		{NodeHandle: "h3", RemotePath: "/Second/c", LocalPath: "/l/Second/c", Queued: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if f, err := d.LastCompletedFile(); err != nil || f != nil {
+		t.Fatalf("LastCompletedFile with nothing finished = %+v, %v", f, err)
+	}
+
+	// the later download's files: one already on disk, one still to fetch
+	if err := d.SetFileStatusByHandle(second, "h2", FileSkipped); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := d.LastCompletedFile(); err != nil || f != nil {
+		t.Fatalf("a file that was already on disk counted as downloaded: %+v, %v", f, err)
+	}
+
+	// the older download's file finishes now, so it is the newest one landed
+	if err := d.SetFileStatusByHandle(first, "h1", FileDone); err != nil {
+		t.Fatal(err)
+	}
+	f, err := d.LastCompletedFile()
+	if err != nil || f == nil {
+		t.Fatalf("LastCompletedFile = %+v, %v", f, err)
+	}
+	if f.NodeHandle != "h1" || f.DownloadID != first {
+		t.Fatalf("last completed file = %+v, want h1 in download %d", f, first)
+	}
+
+	// stamps land in whole seconds, so age the finished one rather than
+	// racing the clock for the second file
+	if _, err := d.sql.Exec(`UPDATE download_files SET completed_at = completed_at - 60
+		WHERE node_handle = 'h1'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetFileStatusByHandle(second, "h3", FileDone); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := d.LastCompletedFile(); err != nil || f == nil || f.NodeHandle != "h3" {
+		t.Fatalf("last completed file = %+v, %v, want h3", f, err)
+	}
+
+	// requeued and no longer on disk: the stamp describes a 'done' that is
+	// over, so it goes with it
+	if err := d.SetFileStatusByHandle(second, "h3", FilePending); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := d.LastCompletedFile(); err != nil || f == nil || f.NodeHandle != "h1" {
+		t.Fatalf("last completed file = %+v, %v, want h1 back", f, err)
+	}
+}
+
+// A database from before files were stamped still has to answer "what landed
+// most recently", so its finished files inherit their download's completion.
+func TestMigrationBackfillsFileCompletionStamps(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE downloads (
+		id INTEGER PRIMARY KEY,
+		url TEXT NOT NULL,
+		handle TEXT NOT NULL,
+		link_type TEXT NOT NULL,
+		name TEXT NOT NULL,
+		dest_path TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'queued',
+		created_at INTEGER NOT NULL,
+		completed_at INTEGER);
+		CREATE TABLE download_files (
+		id INTEGER PRIMARY KEY,
+		download_id INTEGER NOT NULL,
+		node_handle TEXT NOT NULL,
+		remote_path TEXT NOT NULL,
+		local_path  TEXT NOT NULL,
+		size INTEGER NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		queued INTEGER NOT NULL DEFAULT 1);
+		INSERT INTO downloads (id, url, handle, link_type, name, dest_path, created_at, completed_at)
+		VALUES (1, 'u', 'h', 'folder', 'Show', '/l/Show', 1, 500);
+		INSERT INTO download_files (download_id, node_handle, remote_path, local_path, size, status)
+		VALUES (1, 'h1', '/Show/a', '/l/Show/a', 5, 'done'),
+		       (1, 'h2', '/Show/b', '/l/Show/b', 5, 'pending')`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	f, err := d.LastCompletedFile()
+	if err != nil || f == nil {
+		t.Fatalf("LastCompletedFile after migration = %+v, %v", f, err)
+	}
+	if f.NodeHandle != "h1" {
+		t.Fatalf("last completed file = %+v, want h1", f)
+	}
+}

@@ -1612,6 +1612,8 @@ func TestFKeyJumpsToTheQueueHead(t *testing.T) {
 	}
 }
 
+// With nothing queued and nothing ever downloaded there is nowhere to jump, so
+// the key says so and leaves the cursor alone.
 func TestFKeyOnAnEmptyQueueSaysSo(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	if err := database.SetDownloadQueued(id, false); err != nil {
@@ -1627,6 +1629,63 @@ func TestFKeyOnAnEmptyQueueSaysSo(t *testing.T) {
 	}
 	if m.cursor != cursor {
 		t.Fatalf("cursor moved to %d with nothing queued, want %d", m.cursor, cursor)
+	}
+}
+
+// An empty queue leaves the key its other job: with no work to follow, it goes
+// to the file that finished most recently, wherever in the library that is.
+func TestFKeyOnAnEmptyQueueJumpsToTheLastDownloadedFile(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+	app.eng = engine.New(nil, database)
+	oldID, err := database.InsertDownload(&db.Download{
+		URL: "old", Handle: "old", LinkType: "folder", Name: "Old",
+		DestPath: "/dl/Old",
+	}, []db.File{
+		{NodeHandle: "a", RemotePath: "/Old/a", LocalPath: "/dl/Old/a"},
+		{NodeHandle: "b", RemotePath: "/Old/b", LocalPath: "/dl/Old/b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// newer, so the cursor starts here rather than on the finished file
+	if _, err := database.InsertDownload(&db.Download{
+		URL: "new", Handle: "new", LinkType: "folder", Name: "New",
+		DestPath: "/dl/New",
+	}, []db.File{
+		{NodeHandle: "c", RemotePath: "/New/c", LocalPath: "/dl/New/c"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetFileStatusByHandle(oldID, "b", db.FileDone); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &app.downloads
+	m.reload()
+	if m.rows[m.cursor].ID == oldID {
+		t.Fatal("cursor already on the finished download; the jump proves nothing")
+	}
+	if queue, err := database.Queue(); err != nil || len(queue) != 0 {
+		t.Fatalf("queue = %v, %v, want it empty", queue, err)
+	}
+
+	pressKey(m, "f")
+	if got := m.rows[m.cursor].ID; got != oldID {
+		t.Fatalf("cursor on download %d, want the last downloaded one %d", got, oldID)
+	}
+	if m.pane != paneFiles {
+		t.Fatalf("focused pane = %v, want the files pane", m.pane)
+	}
+	i := m.cursorFile()
+	if i < 0 {
+		t.Fatal("file cursor left on a directory header, want the finished file")
+	}
+	if got := m.files[i].NodeHandle; got != "b" {
+		t.Fatalf("file cursor on %q, want the last downloaded file %q", got, "b")
+	}
+	// the cursor landing somewhere says everything the jump has to say
+	if m.notice != "" {
+		t.Fatalf("notice = %q, want none on a jump that worked", m.notice)
 	}
 }
 

@@ -460,28 +460,41 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 // focusHead moves the cursor to what the queue is working on: the download at
 // the front, and the file inside it being fetched or held at. A current file
 // is selected in the files pane regardless of which pane the jump started in.
+// With nothing queued there is no work to jump to, so it lands on the file that
+// finished most recently — the other place the key is wanted, and the one the
+// user was most likely waiting on.
 func (m *downloadsModel) focusHead() {
-	if m.head.dl == nil {
-		m.notice = "queue is empty"
+	if m.head.dl != nil {
+		m.focusFile(m.head.dl.ID, m.head.file)
 		return
 	}
+	last, err := m.app.db.LastCompletedFile()
+	if err != nil || last == nil || !m.focusFile(last.DownloadID, last) {
+		m.notice = "queue is empty"
+	}
+}
+
+// focusFile puts the list cursor on a download and, when a file is given, the
+// file pane's cursor on that file — the file asked for, not the download's
+// remembered one, since landing on it is the point of the jump. It reports
+// whether the download was still in the list.
+func (m *downloadsModel) focusFile(downloadID int64, file *db.File) bool {
 	for i, dl := range m.rows {
-		if dl.ID != m.head.dl.ID {
+		if dl.ID != downloadID {
 			continue
 		}
 		if i != m.cursor {
 			m.cursor = i
 			m.loadFiles()
 		}
-		if m.head.file != nil {
-			// the head's file, not the download's remembered one: landing on
-			// the running file is the point of the jump
+		if file != nil {
 			m.cursorDir = ""
-			m.focusRow(m.head.file.ID)
+			m.focusRow(file.ID)
 			m.pane = paneFiles
 		}
-		return
+		return true
 	}
+	return false
 }
 
 // dismissDetail hides what the detail strip is saying right now. A selected

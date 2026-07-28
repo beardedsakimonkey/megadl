@@ -4,6 +4,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -43,7 +44,9 @@ CREATE TABLE IF NOT EXISTS download_files (
   size         INTEGER NOT NULL,
   status       TEXT NOT NULL DEFAULT 'pending'
                CHECK (status IN ('pending','done','skipped','error')),
-  queued       INTEGER NOT NULL DEFAULT 1
+  queued       INTEGER NOT NULL DEFAULT 1,
+  -- when this file finished downloading here; 0 unless status is 'done'
+  completed_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_files_download ON download_files(download_id);
 
@@ -164,6 +167,7 @@ func Open(path string) (*DB, error) {
 		`ALTER TABLE downloads ADD COLUMN selected_dir TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE downloads ADD COLUMN queued_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE download_files ADD COLUMN queued INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE download_files ADD COLUMN completed_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE ui_state ADD COLUMN files_pane_selected INTEGER NOT NULL DEFAULT 0
 			CHECK (files_pane_selected IN (0,1))`,
 	} {
@@ -180,6 +184,12 @@ func Open(path string) (*DB, error) {
 			(SELECT id FROM downloads WHERE status = 'stopped')`,
 		`UPDATE downloads SET status = 'queued' WHERE status IN ('running','stopped','quota')`,
 		`UPDATE downloads SET queued_at = created_at WHERE queued_at = 0`,
+		// Files that landed before this column existed have no stamp of their
+		// own; their download's completion time is the closest thing on record,
+		// and it keeps older files ordered behind newer ones.
+		`UPDATE download_files SET completed_at = COALESCE(
+			(SELECT completed_at FROM downloads WHERE id = download_id), 0)
+			WHERE status = 'done' AND completed_at = 0`,
 	} {
 		if _, err := h.Exec(stmt); err != nil {
 			h.Close()
@@ -668,15 +678,46 @@ func recalcTotalBytes(x interface {
 }
 
 func (d *DB) SetFileStatusByLocalPath(downloadID int64, localPath, status string) error {
-	_, err := d.sql.Exec(`UPDATE download_files SET status = ? WHERE download_id = ? AND local_path = ?`,
-		status, downloadID, localPath)
+	_, err := d.sql.Exec(`UPDATE download_files SET status = ?, completed_at = ?
+		WHERE download_id = ? AND local_path = ?`,
+		status, completionStamp(status), downloadID, localPath)
 	return err
 }
 
 func (d *DB) SetFileStatusByHandle(downloadID int64, handle, status string) error {
-	_, err := d.sql.Exec(`UPDATE download_files SET status = ? WHERE download_id = ? AND node_handle = ?`,
-		status, downloadID, handle)
+	_, err := d.sql.Exec(`UPDATE download_files SET status = ?, completed_at = ?
+		WHERE download_id = ? AND node_handle = ?`,
+		status, completionStamp(status), downloadID, handle)
 	return err
+}
+
+// completionStamp is when a file landed, and only a file that just finished
+// downloading has one: any other status clears it, so completed_at never
+// outlives the 'done' it describes.
+func completionStamp(status string) int64 {
+	if status != FileDone {
+		return 0
+	}
+	return time.Now().Unix()
+}
+
+// LastCompletedFile is the file this app downloaded most recently, or nil when
+// nothing has ever finished. Files that were already on disk are not it: they
+// were never fetched, so they carry no stamp.
+func (d *DB) LastCompletedFile() (*File, error) {
+	var f File
+	err := d.sql.QueryRow(`SELECT `+fileCols+` FROM download_files
+		WHERE status = ? AND completed_at > 0
+		ORDER BY completed_at DESC, id DESC LIMIT 1`, FileDone).
+		Scan(&f.ID, &f.DownloadID, &f.NodeHandle, &f.RemotePath,
+			&f.LocalPath, &f.Size, &f.Status, &f.Queued)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
 }
 
 // LogTransfer appends downloaded-bytes deltas for quota accounting.
