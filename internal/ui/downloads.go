@@ -1207,6 +1207,11 @@ func (m *downloadsModel) filesView(width, height int) string {
 			i == cursorRow, r.depth, width, sizeW))
 	}
 
+	// Keep drawing the gutter after the last tree row so the vertical divider
+	// reaches the footer rule instead of stopping wherever the file list ends.
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
 	gutter := styleDim.Render("│ ")
 	for i := range lines {
 		lines[i] = gutter + lines[i]

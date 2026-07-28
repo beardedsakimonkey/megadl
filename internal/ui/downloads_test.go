@@ -493,6 +493,14 @@ func TestFilesViewRendersDirectoryTree(t *testing.T) {
 	if !strings.HasPrefix(header, "│   Season 01/") {
 		t.Fatalf("folder header misrendered: %q", header)
 	}
+	if len(lines) != 10 {
+		t.Fatalf("files view height = %d, want 10", len(lines))
+	}
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "│") {
+			t.Fatalf("files view row %d does not carry the pane divider: %q", i, line)
+		}
+	}
 }
 
 // A finished download with a partial selection still measures against the
