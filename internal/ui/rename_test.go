@@ -226,3 +226,21 @@ func TestRenameEscapeLeavesEverythingAlone(t *testing.T) {
 		t.Fatalf("original folder moved: %v", err)
 	}
 }
+
+func TestRenamePromptOpensNoWiderThanTheTerminal(t *testing.T) {
+	app, database, id := renameTestApp(t)
+	long := strings.Repeat("season-of-the-show-", 6)
+	if err := database.RenameDownload(id, long, filepath.Join(app.cfg.DownloadDir, "Show"),
+		filepath.Join(app.cfg.DownloadDir, long)); err != nil {
+		t.Fatal(err)
+	}
+	app.downloads.reload()
+
+	for _, width := range []int{40, 60, 79, 200} {
+		app.width, app.height = width, 24
+		prompt := newRenameModel(app, app.downloads.rows[app.downloads.cursor])
+		prompt.errMsg = "rename: " + strings.Repeat("a-long-failure-message ", 6)
+		assertFitsWidth(t, prompt.view(), min(width, modalWidth+styleModal.GetHorizontalFrameSize()),
+			"rename prompt")
+	}
+}

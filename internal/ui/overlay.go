@@ -3,8 +3,38 @@ package ui
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
+
+const (
+	// modalWidth is the content width a dialog prefers — room for a mega link
+	// beside its prompt — and the cap on any terminal wider than that, so a
+	// dialog stays a dialog instead of stretching across the screen.
+	modalWidth = 73
+	// modalMinWidth is the point below which shrinking stops helping: a
+	// terminal narrower than that gets a cropped dialog either way.
+	modalMinWidth = 20
+)
+
+// modalContentWidth is how many cells a dialog's body may use, at most limit:
+// the terminal it opens on less the modal's border and padding, so a dialog
+// never opens wider than the screen. Dialogs size themselves once, when they
+// open; a zero terminal width means nothing has reported one yet, and the
+// preferred width is the best guess.
+func modalContentWidth(termWidth, limit int) int {
+	if termWidth <= 0 {
+		return limit
+	}
+	return max(modalMinWidth, min(limit, termWidth-styleModal.GetHorizontalFrameSize()))
+}
+
+// promptWidth is how many cells a text input spends on its prompt, which is
+// what a dialog has to hand back to it when sizing the input to a line.
+func promptWidth(in textinput.Model) int {
+	return lipgloss.Width(in.PromptStyle.Render(in.Prompt))
+}
 
 // rect is a region of the terminal grid.
 type rect struct{ x, y, w, h int }

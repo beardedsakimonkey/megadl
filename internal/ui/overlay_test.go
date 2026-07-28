@@ -8,6 +8,18 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// assertFitsWidth fails when any line of a dialog is wider than the terminal
+// it has to render inside.
+func assertFitsWidth(t *testing.T, view string, width int, label string) {
+	t.Helper()
+	for _, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > width {
+			t.Fatalf("terminal %d, %s: line %q is %d cells wide",
+				width, label, ansi.Strip(line), got)
+		}
+	}
+}
+
 func TestOverlayCenterPlacesDialogOverBackground(t *testing.T) {
 	bg := strings.TrimSuffix(strings.Repeat("..........\n", 5), "\n")
 	got := overlayCenter(bg, "AB\nCD", 10, 5)

@@ -15,13 +15,16 @@ import (
 // library and takes the folder (or, for file links, the file) it occupies on
 // disk with it.
 type deleteModel struct {
-	app    *App
-	dl     *db.Download
+	app *App
+	dl  *db.Download
+	// width is the dialog's content width, fixed when it opened so it never
+	// starts out wider than the terminal.
+	width  int
 	errMsg string
 }
 
 func newDeleteModel(app *App, dl *db.Download) *deleteModel {
-	return &deleteModel{app: app, dl: dl}
+	return &deleteModel{app: app, dl: dl, width: modalContentWidth(app.width, modalWidth)}
 }
 
 // update returns nil to close the modal.
@@ -92,12 +95,13 @@ func (m *deleteModel) view() string {
 	if m.dl.LinkType == "file" {
 		noun = "file"
 	}
+	w := m.width
 	body := styleTitle.Render("Delete download") + "\n\n" +
-		truncateMiddle(m.dl.Name, 60) + "\n\n" +
-		styleWarn.Render("this deletes the "+noun+" from disk:") + "\n" +
-		styleDim.Render(truncateMiddle(m.dl.DestPath, 60))
+		truncateMiddle(m.dl.Name, w) + "\n\n" +
+		styleWarn.Render(wrap("this deletes the "+noun+" from disk:", w)) + "\n" +
+		styleDim.Render(truncateMiddle(m.dl.DestPath, w))
 	if m.errMsg != "" {
-		body += "\n\n" + styleError.Render(m.errMsg)
+		body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
 	}
 	return styleModal.Render(body)
 }

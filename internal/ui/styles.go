@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -363,6 +364,16 @@ func truncate(s string, w int) string {
 		return string(r[:w])
 	}
 	return string(r[:w-1]) + "…"
+}
+
+// wrap breaks s onto lines of at most w cells. Words longer than the line are
+// broken mid-word rather than allowed to run past it, which is what keeps a
+// URL or a bare error string from widening the modal it sits in.
+func wrap(s string, w int) string {
+	if w <= 0 {
+		return s
+	}
+	return ansi.Wrap(s, w, "")
 }
 
 // truncateMiddle keeps both ends of long strings (URLs).

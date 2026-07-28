@@ -36,6 +36,11 @@ const (
 	decodeFrameInterval = 40 * time.Millisecond
 )
 
+// pickerWidth caps the file picker higher than the other dialogs: it lists
+// names rather than sentences, and every extra cell is one less name that gets
+// truncated.
+const pickerWidth = 96
+
 var reFileLink = regexp.MustCompile(`(?i)mega(\.co)?\.nz/(#!|file/)`)
 var reFolderLink = regexp.MustCompile(`(?i)mega(\.co)?\.nz/(#F!|folder/)`)
 
@@ -70,6 +75,12 @@ type addlinkModel struct {
 	existing *db.Download
 	errMsg   string
 
+	// width is the dialog's content width, fixed when it opened so it never
+	// starts out wider than the terminal, and pickerW the wider one the file
+	// list is allowed.
+	width   int
+	pickerW int
+
 	// modal is where the last render placed the dialog, in body
 	// coordinates, so clicks can be mapped onto picker rows.
 	modal  rect
@@ -82,13 +93,17 @@ type addlinkModel struct {
 }
 
 func newAddlinkModel(app *App) *addlinkModel {
+	w := modalContentWidth(app.width, modalWidth)
+
+	// bubbles renders a value as prompt+Width+1 cells, so a prompt gets
+	// whatever the line has left once its own prefix is accounted for.
 	url := textinput.New()
 	url.Placeholder = "https://mega.nz/..."
 	url.Focus()
-	url.Width = 70
+	url.Width = max(8, w-promptWidth(url)-1)
 
 	name := textinput.New()
-	name.Width = 60
+	name.Width = max(8, w-promptWidth(name)-1)
 
 	sp := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
@@ -102,6 +117,8 @@ func newAddlinkModel(app *App) *addlinkModel {
 		spin:         sp,
 		linkHistory:  submittedLinkHistory(app.downloads.rows),
 		historyIndex: -1,
+		width:        w,
+		pickerW:      modalContentWidth(app.width, pickerWidth),
 	}
 }
 
@@ -160,7 +177,7 @@ func (m *addlinkModel) nextURL() {
 // would otherwise widen the moment the input gets content.
 func (m *addlinkModel) urlInputView() string {
 	view := m.urlInput.View()
-	w := lipgloss.Width(m.urlInput.PromptStyle.Render(m.urlInput.Prompt)) + m.urlInput.Width + 1
+	w := promptWidth(m.urlInput) + m.urlInput.Width + 1
 	if pad := w - lipgloss.Width(view); pad > 0 {
 		view += strings.Repeat(" ", pad)
 	}
@@ -664,12 +681,13 @@ func (m *addlinkModel) help() string {
 }
 
 func (m *addlinkModel) view() string {
+	w := m.width
 	var body string
 	switch m.state {
 	case stateURL:
 		body = styleTitle.Render("Add mega.nz link") + "\n\n" + m.urlInputView()
 		if m.errMsg != "" {
-			body += "\n\n" + styleError.Render(m.errMsg)
+			body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
 		}
 	case stateDecoding:
 		// the animation stands in for the input's value: same title and
@@ -681,37 +699,39 @@ func (m *addlinkModel) view() string {
 			prompt + lipgloss.NewStyle().Width(width).Render(frame)
 	case stateListing:
 		body = styleTitle.Render("Add mega.nz link") + "\n\n" +
-			m.spin.View() + " fetching listing…\n" + styleDim.Render(truncateMiddle(m.url, 70))
+			m.spin.View() + " fetching listing…\n" + styleDim.Render(truncateMiddle(m.url, w))
 	case statePicker:
 		body = styleTitle.Render("Choose files") + "\n\n" +
-			m.picker.view(m.app.width-8, m.pickerVisible())
+			m.picker.view(m.pickerW, m.pickerVisible())
 		if m.errMsg != "" {
-			body += "\n" + styleError.Render(m.errMsg)
+			body += "\n" + styleError.Render(wrap(m.errMsg, w))
 		}
 	case stateName:
 		count, bytes := 1, m.nodes[0].Size
 		if len(m.picker.rows) > 0 {
 			count, bytes = m.picker.totals()
 		}
+		summary := fmt.Sprintf("%d file(s), %s → ", count, humanBytes(bytes))
 		body = styleTitle.Render("Name already taken") + "\n\n" +
 			m.nameInput.View() + "\n\n" +
-			styleDim.Render(fmt.Sprintf("%d file(s), %s → %s/", count, humanBytes(bytes),
-				truncateMiddle(m.app.cfg.DownloadDir, 50)))
+			styleDim.Render(summary+truncateMiddle(m.app.cfg.DownloadDir,
+				max(8, w-lipgloss.Width(summary)-1))+"/")
 		if m.errMsg != "" {
-			body += "\n\n" + styleError.Render(m.errMsg)
+			body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
 		}
 	case stateExisting:
 		body = styleTitle.Render("Already in library") + "\n\n" +
-			fmt.Sprintf("%q already represents this MEGA %s.\n\n", m.existing.Name, m.existing.LinkType) +
+			wrap(fmt.Sprintf("%q already represents this MEGA %s.",
+				m.existing.Name, m.existing.LinkType), w) + "\n\n" +
 			styleDim.Render(fmt.Sprintf("%s  %s\n%s",
 				m.existing.Status,
 				humanBytes(m.existing.TotalBytes),
-				truncateMiddle(m.existing.DestPath, 70))) +
-			"\n\nReuse this download instead of creating another copy?"
+				truncateMiddle(m.existing.DestPath, w))) +
+			"\n\n" + wrap("Reuse this download instead of creating another copy?", w)
 	case stateFailed:
 		body = styleTitle.Render("Listing failed") + "\n\n" +
-			styleError.Render(truncate(m.errMsg, 80)) + "\n\n" +
-			styleDim.Render("press any key to edit the link, esc to close")
+			styleError.Render(wrap(m.errMsg, w)) + "\n\n" +
+			styleDim.Render(wrap("press any key to edit the link, esc to close", w))
 	}
 	return styleModal.Render(body)
 }

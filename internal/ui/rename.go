@@ -16,18 +16,24 @@ import (
 // renameModel is the modal prompt behind r: it renames a download along with
 // the folder (or, for file links, the file) it occupies on disk.
 type renameModel struct {
-	app    *App
-	dl     *db.Download
+	app *App
+	dl  *db.Download
+	// width is the dialog's content width, fixed when it opened so it never
+	// starts out wider than the terminal.
+	width  int
 	input  textinput.Model
 	errMsg string
 }
 
 func newRenameModel(app *App, dl *db.Download) *renameModel {
+	w := modalContentWidth(app.width, modalWidth)
 	name := textinput.New()
-	name.Width = 60
+	// The width is set before the value so bubbles works out which part of a
+	// long name is on screen against the width it will be rendered at.
+	name.Width = max(8, w-promptWidth(name)-1)
 	name.SetValue(dl.Name)
 	name.CursorEnd()
-	return &renameModel{app: app, dl: dl, input: name}
+	return &renameModel{app: app, dl: dl, width: w, input: name}
 }
 
 func (m *renameModel) init() tea.Cmd {
@@ -122,11 +128,12 @@ func (m *renameModel) help() string {
 }
 
 func (m *renameModel) view() string {
+	w := m.width
 	body := styleTitle.Render("Rename download") + "\n\n" +
 		m.input.View() + "\n\n" +
-		styleDim.Render(truncateMiddle(filepath.Dir(m.dl.DestPath), 60)+string(filepath.Separator))
+		styleDim.Render(truncateMiddle(filepath.Dir(m.dl.DestPath), w-1)+string(filepath.Separator))
 	if m.errMsg != "" {
-		body += "\n\n" + styleError.Render(m.errMsg)
+		body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
 	}
 	return styleModal.Render(body)
 }

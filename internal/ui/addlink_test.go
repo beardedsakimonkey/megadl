@@ -292,6 +292,88 @@ func TestAddlinkClearsInvalidLinkErrorWhenInputChanges(t *testing.T) {
 	}
 }
 
+// addlinkStates puts m through every state the dialog renders, so a layout
+// check can walk all of them.
+func addlinkStates(m *addlinkModel) []struct {
+	name  string
+	setup func()
+} {
+	longURL := "https://mega.nz/folder/EEEEEEEE#" + strings.Repeat("k", 60)
+	longErr := "list: Get \"" + longURL + "\": dial tcp: lookup g.api.mega.co.nz: no such host"
+	nodes := []mega.Node{
+		{Path: "/Album", Name: "Album", Type: "folder", Handle: "root"},
+		{Path: "/Album/" + strings.Repeat("long-name-", 8) + ".mkv",
+			Name: strings.Repeat("long-name-", 8) + ".mkv",
+			Type: "file", Handle: "f1", Parent: "root", Size: 1 << 30},
+	}
+	return []struct {
+		name  string
+		setup func()
+	}{
+		{"url", func() { m.state, m.errMsg = stateURL, "" }},
+		{"url error", func() { m.state, m.errMsg = stateURL, longErr }},
+		{"url value", func() {
+			m.state, m.errMsg = stateURL, ""
+			m.urlInput.SetValue(longURL)
+			m.urlInput.CursorEnd()
+		}},
+		{"decoding", func() {
+			m.state, m.decodeSrc, m.decodeTarget = stateDecoding, longURL, longURL
+			m.decodeFrame = decodeFrames / 2
+		}},
+		{"listing", func() { m.state, m.url = stateListing, longURL }},
+		{"picker", func() {
+			m.state, m.errMsg = statePicker, "nothing selected"
+			m.picker = newPicker(nodes)
+		}},
+		{"name", func() {
+			m.state, m.errMsg, m.nodes = stateName, longErr, nodes
+			m.nameInput.SetValue(strings.Repeat("name-", 12))
+			m.nameInput.CursorEnd()
+		}},
+		{"existing", func() {
+			m.state = stateExisting
+			m.existing = &db.Download{
+				Name:     strings.Repeat("album-", 12),
+				LinkType: "folder",
+				Status:   db.StatusDone,
+				DestPath: "/Users/someone/Downloads/" + strings.Repeat("album-", 12),
+			}
+		}},
+		{"failed", func() { m.state, m.errMsg = stateFailed, longErr }},
+	}
+}
+
+func TestAddlinkDialogOpensNoWiderThanTheTerminal(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+
+	for _, width := range []int{40, 60, 79, 100} {
+		app.width, app.height = width, 24
+		m := newAddlinkModel(app)
+		for _, state := range addlinkStates(m) {
+			state.setup()
+			assertFitsWidth(t, m.view(), width, "state "+state.name)
+		}
+	}
+}
+
+func TestAddlinkDialogStopsGrowingOnWideTerminal(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	app.width, app.height = 300, 40
+	m := newAddlinkModel(app)
+
+	want := modalWidth + styleModal.GetHorizontalFrameSize()
+	for _, state := range addlinkStates(m) {
+		if state.name == "picker" {
+			continue // the file list is allowed the wider cap
+		}
+		state.setup()
+		if got := lipgloss.Width(m.view()); got > want {
+			t.Fatalf("state %s: dialog width = %d, want at most %d", state.name, got, want)
+		}
+	}
+}
+
 func TestAddlinkDecodeAnimationKeepsDialogWidthStable(t *testing.T) {
 	app, _ := openAddlinkTestApp(t)
 	link := "https://mega.nz/file/DDDDDDDD#0123456789abcdefghijkl"

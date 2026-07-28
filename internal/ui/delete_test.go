@@ -141,9 +141,22 @@ func TestDeleteDialogNamesTheDestination(t *testing.T) {
 	app, _, dest := deleteTestApp(t)
 	view := ansi.Strip(openDelete(t, app).view())
 
-	for _, want := range []string{"Folder", truncateMiddle(dest, 60)} {
+	for _, want := range []string{"Folder", truncateMiddle(dest, modalWidth)} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("delete dialog = %q, want it to mention %q", view, want)
 		}
+	}
+}
+
+func TestDeleteDialogOpensNoWiderThanTheTerminal(t *testing.T) {
+	app, _, _ := deleteTestApp(t)
+	for _, width := range []int{40, 60, 79, 200} {
+		app.width, app.height = width, 24
+		dialog := newDeleteModel(app, app.downloads.rows[app.downloads.cursor])
+		dialog.dl.Name = strings.Repeat("folder-name-", 8)
+		dialog.dl.DestPath = filepath.Join("/Users/someone/Downloads", dialog.dl.Name)
+		dialog.errMsg = "unlinkat: " + strings.Repeat("a-long-failure-message ", 6)
+		assertFitsWidth(t, dialog.view(), min(width, modalWidth+styleModal.GetHorizontalFrameSize()),
+			"delete dialog")
 	}
 }
