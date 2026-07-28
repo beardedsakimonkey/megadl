@@ -153,12 +153,12 @@ func TestRateStyleGradesSpeedFromFastToSlow(t *testing.T) {
 	}
 }
 
-func TestStatusbarBarStaysPutAsNumbersChange(t *testing.T) {
-	barAt := func(done int64, rate float64) int {
+func TestStatusbarBarStaysPutAcrossFilesAndNumberChanges(t *testing.T) {
+	barAt := func(done, total int64, rate float64) int {
 		snap := engine.Snapshot{
 			ActiveID:    3,
 			CurrentFile: "file.mkv",
-			FileSize:    30 << 20,
+			FileSize:    total,
 			FileDone:    done,
 			Rate:        rate,
 		}
@@ -166,20 +166,21 @@ func TestStatusbarBarStaysPutAsNumbersChange(t *testing.T) {
 			"█"+strings.Join(eighthBlocks[:], ""))
 	}
 
-	want := barAt(0, 0)
+	want := barAt(0, 30<<20, 0)
 	for _, tc := range []struct {
-		done int64
-		rate float64
+		done  int64
+		total int64
+		rate  float64
 	}{
-		{512, 0},                   // sub-unit done, no rate yet
-		{5 << 20, 100 << 10},       // KiB/s rate
-		{12 << 20, 999 << 10},      // widest KiB/s rate
-		{29<<20 + 12345, 2 << 20},  // MiB/s rate
-		{30 << 20, 1023<<10 + 512}, // done, rate at the KiB/MiB boundary
+		{512, 30 << 20, 0},                   // sub-unit done, no rate yet
+		{5 << 20, 117 << 20, 100 << 10},      // next file has a wider MiB total
+		{12 << 20, 2 << 30, 999 << 10},       // next file uses a different unit
+		{998, 999, 2 << 20},                  // next file is measured in bytes
+		{30 << 20, 30 << 20, 1023<<10 + 512}, // rate crosses the KiB/MiB boundary
 	} {
-		if got := barAt(tc.done, tc.rate); got != want {
-			t.Fatalf("bar starts at %d for done=%d rate=%.0f, want %d",
-				got, tc.done, tc.rate, want)
+		if got := barAt(tc.done, tc.total, tc.rate); got != want {
+			t.Fatalf("bar starts at %d for done=%d total=%d rate=%.0f, want %d",
+				got, tc.done, tc.total, tc.rate, want)
 		}
 	}
 }

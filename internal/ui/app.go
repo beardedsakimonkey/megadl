@@ -423,6 +423,11 @@ func (a *App) statusbarView() string {
 	return statusbarLine(next, marker, a.width, a.shine.offsetAt(time.Now()))
 }
 
+// bytesPair can reach 1024.0 at a unit boundary because it rounds to one
+// decimal place. Reserving that widest representation keeps the progress bar
+// in the same column when the queue advances to a file with a different size.
+const statusbarBytesW = len("1024.0 / 1024.0 MiB")
+
 // statusbarLine renders the strip above the footer for a file transfer:
 // marker, name, progress bar, percent, bytes, and rate. The marker arrives
 // already styled, and offset says how far along the bar the sweep's bands have
@@ -436,7 +441,7 @@ func statusbarLine(snap engine.Snapshot, marker string, width int, offset float6
 		frac = min(1, max(0, float64(snap.FileDone)/float64(snap.FileSize)))
 	}
 	percent := percentText(frac)
-	bytes := bytesPair(snap.FileDone, snap.FileSize)
+	bytes := fmt.Sprintf("%*s", statusbarBytesW, bytesPair(snap.FileDone, snap.FileSize))
 	// A zero rate keeps its (blank) column so the line doesn't reflow when the
 	// transfer stalls or has just started. A paused queue uses that same
 	// column for its state, keeping every field to its left in place.
