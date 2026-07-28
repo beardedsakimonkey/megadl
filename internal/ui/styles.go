@@ -45,7 +45,7 @@ var (
 	// the bars read as bars instead of blending into a texture.
 	styleSparkTrack = lipgloss.NewStyle().Background(colorSparkTrack)
 
-	styleModal = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
+	styleModal = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).
 			BorderForeground(colorPrimary).Padding(1, 2)
 )
 
