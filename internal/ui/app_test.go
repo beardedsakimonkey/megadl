@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -313,8 +314,16 @@ func TestStatusbarMarksHeldQueueHead(t *testing.T) {
 	app.eng.SetPaused(true)
 
 	got := app.statusbarView()
-	if plain := ansi.Strip(got); !strings.Contains(plain, pausedGlyph+" episode-01.mkv") {
+	plain := ansi.Strip(got)
+	if !strings.Contains(plain, pausedGlyph+" episode-01.mkv") {
 		t.Fatalf("statusbar = %q, want marker %q", plain, pausedGlyph)
+	}
+	if !strings.Contains(plain, "PAUSED") {
+		t.Fatalf("statusbar = %q, want PAUSED in the rate column", plain)
+	}
+	pausedRate := fmt.Sprintf("%*s", len("1023.9 KiB/s"), "PAUSED")
+	if !strings.Contains(got, styleWarn.Render(pausedRate)) {
+		t.Fatalf("statusbar = %q, want orange state %q", got, styleWarn.Render(pausedRate))
 	}
 	// The bar keeps the green it has while running, lit by bands that have
 	// stopped where they stood rather than by a color of its own.

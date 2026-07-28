@@ -437,14 +437,16 @@ func statusbarLine(snap engine.Snapshot, marker string, width int, offset float6
 	}
 	percent := percentText(frac)
 	bytes := bytesPair(snap.FileDone, snap.FileSize)
-	// A zero rate keeps its (blank) column so the line doesn't reflow
-	// when the transfer stalls or has just started.
+	// A zero rate keeps its (blank) column so the line doesn't reflow when the
+	// transfer stalls or has just started. A paused queue uses that same
+	// column for its state, keeping every field to its left in place.
 	const rateW = len("1023.9 KiB/s")
 	rate := fmt.Sprintf("%*s", rateW, humanRate(snap.Rate))
-	// A stalled transfer has no speed to grade, so leave its blank column
-	// unstyled rather than painting the ramp's slowest color onto spaces.
 	rateStyled := rate
-	if snap.Rate > 0 {
+	if snap.Paused {
+		rate = fmt.Sprintf("%*s", rateW, "PAUSED")
+		rateStyled = styleWarn.Render(rate)
+	} else if snap.Rate > 0 {
 		rateStyled = rateStyle(snap.Rate).Render(rate)
 	}
 
