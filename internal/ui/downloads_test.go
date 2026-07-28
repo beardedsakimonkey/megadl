@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -1728,6 +1729,46 @@ func TestFKeyOnAnEmptyQueueJumpsToTheLastDownloadedFile(t *testing.T) {
 	// the cursor landing somewhere says everything the jump has to say
 	if m.notice != "" {
 		t.Fatalf("notice = %q, want none on a jump that worked", m.notice)
+	}
+}
+
+// Landing deep in a long folder is only useful if the file can be seen with its
+// neighbours, so the jump centers the pane the way z does.
+func TestFKeyCentersTheFilePaneOnItsTarget(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+	app.eng = engine.New(nil, database)
+	var files []db.File
+	for i := range 20 {
+		name := fmt.Sprintf("f%02d", i)
+		files = append(files, db.File{
+			NodeHandle: name, RemotePath: "/Long/" + name,
+			LocalPath: "/dl/Long/" + name, Queued: true,
+		})
+	}
+	id, err := database.InsertDownload(&db.Download{
+		URL: "long", Handle: "long", LinkType: "folder", Name: "Long",
+		DestPath: "/dl/Long",
+	}, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// everything up to f11 is on disk, so the head's work is row 12 of the tree
+	for i := range 12 {
+		if err := database.SetFileStatusByHandle(id, fmt.Sprintf("f%02d", i), db.FileDone); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m := &app.downloads
+	m.paneHeight = 8 // title plus seven file rows
+	m.reload()
+
+	pressKey(m, "f")
+	if i := m.cursorFile(); i < 0 || m.files[i].NodeHandle != "f12" {
+		t.Fatalf("file cursor = %d, want the head's pending file f12", i)
+	}
+	if m.treeScroll != 9 {
+		t.Fatalf("tree scroll = %d, want 9 so cursor row 12 is centered in seven rows", m.treeScroll)
 	}
 }
 

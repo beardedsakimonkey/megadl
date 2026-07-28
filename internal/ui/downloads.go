@@ -497,8 +497,9 @@ func (m *downloadsModel) focusHead() {
 
 // focusFile puts the list cursor on a download and, when a file is given, the
 // file pane's cursor on that file — the file asked for, not the download's
-// remembered one, since landing on it is the point of the jump. It reports
-// whether the download was still in the list.
+// remembered one, since landing on it is the point of the jump. The pane is
+// centered on it as z would, so the jump lands somewhere readable rather than
+// against an edge. It reports whether the download was still in the list.
 func (m *downloadsModel) focusFile(downloadID int64, file *db.File) bool {
 	for i, dl := range m.rows {
 		if dl.ID != downloadID {
@@ -511,6 +512,7 @@ func (m *downloadsModel) focusFile(downloadID int64, file *db.File) bool {
 		if file != nil {
 			m.cursorDir = ""
 			m.focusRow(file.ID)
+			m.centerTreeCursor()
 			m.pane = paneFiles
 		}
 		return true
