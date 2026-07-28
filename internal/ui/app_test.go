@@ -108,7 +108,7 @@ func TestStatusbarShowsActiveFileProgress(t *testing.T) {
 		Rate:        2 << 20,
 	}
 
-	line := statusbarLine(snap, "⠋", 100)
+	line := statusbarLine(snap, "⠋", 100, 0)
 	got := ansi.Strip(line)
 	for _, want := range []string{
 		"⠋ episode-01.mkv",
@@ -161,7 +161,7 @@ func TestStatusbarBarStaysPutAsNumbersChange(t *testing.T) {
 			FileDone:    done,
 			Rate:        rate,
 		}
-		return strings.IndexAny(ansi.Strip(statusbarLine(snap, "⠋", 100)),
+		return strings.IndexAny(ansi.Strip(statusbarLine(snap, "⠋", 100, 0)),
 			"█"+strings.Join(eighthBlocks[:], ""))
 	}
 
@@ -184,11 +184,11 @@ func TestStatusbarBarStaysPutAsNumbersChange(t *testing.T) {
 }
 
 func TestStatusbarEmptyWhenIdle(t *testing.T) {
-	if got := statusbarLine(engine.Snapshot{}, "⠋", 100); got != "" {
+	if got := statusbarLine(engine.Snapshot{}, "⠋", 100, 0); got != "" {
 		t.Fatalf("statusbar = %q, want empty", got)
 	}
 	// active download but between files: nothing is being fetched yet
-	if got := statusbarLine(engine.Snapshot{ActiveID: 3}, "⠋", 100); got != "" {
+	if got := statusbarLine(engine.Snapshot{ActiveID: 3}, "⠋", 100, 0); got != "" {
 		t.Fatalf("statusbar = %q, want empty", got)
 	}
 }
@@ -316,10 +316,14 @@ func TestStatusbarMarksHeldQueueHead(t *testing.T) {
 	if plain := ansi.Strip(got); !strings.Contains(plain, pausedGlyph+" episode-01.mkv") {
 		t.Fatalf("statusbar = %q, want marker %q", plain, pausedGlyph)
 	}
-	wantBar := styleWarn.Render(strings.Repeat("█", 8)) +
-		styleProgressTrack.Render(strings.Repeat("█", 12))
+	// The bar keeps the green it has while running, lit by bands that have
+	// stopped where they stood rather than by a color of its own.
+	wantBar := shineProgressBar(20, 0.4, 0)
 	if !strings.Contains(got, wantBar) {
-		t.Fatalf("statusbar = %q, want orange progress bar %q", got, wantBar)
+		t.Fatalf("statusbar = %q, want the still sweep's bar %q", got, wantBar)
+	}
+	if colorEnabled() && strings.Contains(got, styleWarn.Render(strings.Repeat("█", 8))) {
+		t.Fatalf("statusbar = %q, want no orange fill in its bar", got)
 	}
 	if detail := ansi.Strip(app.downloads.detailView(app.width)); strings.Contains(detail, "PAUSED") {
 		t.Fatalf("detail = %q, want no redundant paused notice above the file strip", detail)
@@ -407,7 +411,7 @@ func TestStatusbarNarrowDropsByteCounts(t *testing.T) {
 		Rate:        1 << 20,
 	}
 
-	got := ansi.Strip(statusbarLine(snap, "⠋", 48))
+	got := ansi.Strip(statusbarLine(snap, "⠋", 48, 0))
 	if strings.Contains(got, " / ") {
 		t.Fatalf("statusbar = %q, want byte counts dropped", got)
 	}

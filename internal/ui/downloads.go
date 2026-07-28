@@ -1362,7 +1362,7 @@ func (m *downloadsModel) pausedFile(dl *db.Download, snap engine.Snapshot) int64
 func (m *downloadsModel) dirRowView(r fileTreeRow, selected bool, width int) string {
 	name := truncate(r.dir+"/", max(1, width-3-2*r.depth))
 	line := m.cursorGutter(paneFiles, selected) +
-		strings.Repeat("  ", r.depth) + styleDim.Render(name)
+		strings.Repeat("  ", r.depth) + styleDirectory.Render(name)
 	if selected {
 		// width less the pane divider filesView prepends
 		return tintRow(line, width-1)

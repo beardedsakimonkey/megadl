@@ -23,16 +23,8 @@ import (
 )
 
 func TestProgressBarUsesGreenProgressStyle(t *testing.T) {
-	got := progressBar(4, 0.5, false)
+	got := progressBar(4, 0.5)
 	want := styleProgress.Render("██") + styleProgressTrack.Render("██")
-	if got != want {
-		t.Fatalf("progressBar() = %q, want %q", got, want)
-	}
-}
-
-func TestPausedProgressBarUsesOrangeProgressStyle(t *testing.T) {
-	got := progressBar(4, 0.5, true)
-	want := styleWarn.Render("██") + styleProgressTrack.Render("██")
 	if got != want {
 		t.Fatalf("progressBar() = %q, want %q", got, want)
 	}
@@ -57,7 +49,7 @@ func TestProgressBarFillsLeadingCellByEighths(t *testing.T) {
 		{0.3, styleProgress.Render("█") + partial.Render("▏") + styleProgressTrack.Render("██")},
 		{1, styleProgress.Render("████") + styleProgressTrack.Render("")},
 	} {
-		if got := progressBar(4, tc.frac, false); got != tc.want {
+		if got := progressBar(4, tc.frac); got != tc.want {
 			t.Fatalf("progressBar(4, %v) = %q, want %q", tc.frac, got, tc.want)
 		}
 	}
@@ -1932,12 +1924,12 @@ func TestSelectionIsRestoredInANewSession(t *testing.T) {
 // track share a glyph now, so "full" is the whole rendered bar, colors and
 // all: near the end the shortfall shows up as a partial block on the track.
 func TestPercentTextNeverReadsCompleteBeforeTheBarFills(t *testing.T) {
-	full := progressBar(20, 1, false)
+	full := progressBar(20, 1)
 	for _, frac := range []float64{0.996, 0.9999} {
 		if got := percentText(frac); got != " 99%" {
 			t.Fatalf("percentText(%v) = %q, want %q", frac, got, " 99%")
 		}
-		if bar := progressBar(20, frac, false); bar == full {
+		if bar := progressBar(20, frac); bar == full {
 			t.Fatalf("progressBar(20, %v) = %q, want it short of full", frac, bar)
 		}
 	}

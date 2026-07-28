@@ -37,6 +37,7 @@ var (
 	styleDecode      = lipgloss.NewStyle().Foreground(colorOrange)
 	styleSpinner     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleHelpKey     = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
+	styleDirectory   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	styleLogoMark    = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 	styleTitle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
 	// Leave the foreground unset so the active file's percentage follows the
@@ -312,28 +313,33 @@ func percentText(frac float64) string {
 // way a full one does instead of floating in the middle of its column.
 var eighthBlocks = [7]string{"▏", "▎", "▍", "▌", "▋", "▊", "▉"}
 
-// progressBar renders a fixed-width bar for frac in [0,1]. A paused transfer
-// uses the same orange as its pause marker. The leading cell is drawn at
-// eighth-of-a-cell resolution so a transfer that has just started reads as
-// moving rather than sitting empty until it has earned a whole cell.
+// barCells splits frac over width cells: the whole cells the fill covers, plus
+// the eighths of the cell it ends part-way across. Every drawing of the
+// statusbar's bar goes through this, so the plain bar and the sweeping one put
+// their boundary in exactly the same place.
+func barCells(width int, frac float64) (filled, rem int) {
+	frac = min(1, max(0, frac))
+	eighths := int(frac * float64(width) * 8)
+	return eighths / 8, eighths % 8
+}
+
+// progressBar renders a fixed-width bar for frac in [0,1]. The bar is green
+// whatever the queue is doing — a held one says so with its marker and with a
+// sweep that has stopped, not with a color of its own. The leading cell is
+// drawn at eighth-of-a-cell resolution so a transfer that has just started
+// reads as moving rather than sitting empty until it has earned a whole cell.
 //
 // Fill and track are the same glyph in different colors, so the bar is one
 // unbroken strip: the partial cell only has to carry the track as its
 // background for the boundary between them to land mid-cell.
-func progressBar(width int, frac float64, paused bool) string {
+func progressBar(width int, frac float64) string {
 	if width < 2 {
 		return ""
 	}
-	frac = min(1, max(0, frac))
-	eighths := int(frac * float64(width) * 8)
-	filled, rem := eighths/8, eighths%8
-	filledStyle := styleProgress
-	if paused {
-		filledStyle = styleWarn
-	}
-	bar := filledStyle.Render(strings.Repeat("█", filled))
+	filled, rem := barCells(width, frac)
+	bar := styleProgress.Render(strings.Repeat("█", filled))
 	if rem > 0 {
-		bar += filledStyle.Background(colorTrack).Render(eighthBlocks[rem-1])
+		bar += styleProgress.Background(colorTrack).Render(eighthBlocks[rem-1])
 		filled++
 	}
 	return bar + styleProgressTrack.Render(strings.Repeat("█", width-filled))
