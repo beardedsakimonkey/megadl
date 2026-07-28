@@ -429,6 +429,10 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 			m.moveTreeCursor(-m.treePageSize())
 		case "pgdown":
 			m.moveTreeCursor(m.treePageSize())
+		case "home":
+			m.moveTreeCursor(-len(m.tree))
+		case "end":
+			m.moveTreeCursor(len(m.tree))
 		case "K":
 			m.treeCursor = siblingRow(m.tree, m.treeCursor, -1)
 		case "J":
@@ -462,6 +466,10 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 		m.moveCursor(-m.listPageSize())
 	case "pgdown":
 		m.moveCursor(m.listPageSize())
+	case "home":
+		m.moveCursor(-len(m.rows))
+	case "end":
+		m.moveCursor(len(m.rows))
 	case "enter":
 		m.toggleDownload()
 	case "o":
