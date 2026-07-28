@@ -25,7 +25,7 @@ const (
 	// shineSpacing is the gap from one band to the next, in cells. It is kept
 	// under the statusbar bar's own width so more than one band is on the bar
 	// at once and the sweep reads as repeating rather than as a lone pass.
-	shineSpacing = 14.0
+	shineSpacing = 17.0
 	// shineHalfWidth is how far a band's light reaches either side of its
 	// center. The falloff spends all of it, so consecutive bands are parted by
 	// a stretch of the bar's flat green instead of running together.
