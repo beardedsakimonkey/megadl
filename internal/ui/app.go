@@ -393,6 +393,12 @@ func statusbarLine(snap engine.Snapshot, marker string, width int) string {
 	// when the transfer stalls or has just started.
 	const rateW = len("1023.9 KiB/s")
 	rate := fmt.Sprintf("%*s", rateW, humanRate(snap.Rate))
+	// A stalled transfer has no speed to grade, so leave its blank column
+	// unstyled rather than painting the ramp's slowest color onto spaces.
+	rateStyled := rate
+	if snap.Rate > 0 {
+		rateStyled = rateStyle(snap.Rate).Render(rate)
+	}
 
 	// " ⠋ name  ███▌░░ 42%  12.4 / 30.0 MiB  3.4 MiB/s ", with the ░ cells
 	// drawn as blocks in the track color. Every field after the bar has a
@@ -427,9 +433,9 @@ func statusbarLine(snap engine.Snapshot, marker string, width int) string {
 	switch stats {
 	case "":
 	case rate:
-		tail += "  " + styleOK.Render(rate)
+		tail += "  " + rateStyled
 	default:
-		tail += "  " + styleDim.Render(bytes) + "  " + styleOK.Render(rate)
+		tail += "  " + styleDim.Render(bytes) + "  " + rateStyled
 	}
 	gap := max(2, width-lipgloss.Width(left)-lipgloss.Width(tail)-1)
 	return left + strings.Repeat(" ", gap) + tail + " "

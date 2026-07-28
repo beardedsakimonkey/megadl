@@ -77,6 +77,32 @@ func quotaStyle(bytes int64) lipgloss.Style {
 	}
 }
 
+// rateBands are the download speeds the rate ramp steps at, fastest first,
+// paired with the style a rate at or above that speed renders in. The steps
+// are a factor of four apart rather than evenly spaced: transfer speed is read
+// by order of magnitude, so linear bands would spend three of the four colors
+// on the fast end and call everything ordinary red.
+var rateBands = []struct {
+	bps   float64
+	style lipgloss.Style
+}{
+	{4 << 20, styleOK},      // a link running at full tilt
+	{1 << 20, stylePartial}, // healthy
+	{256 << 10, styleWarn},  // slow, but still moving
+}
+
+// rateStyle grades a transfer's speed green to red, the same ramp quotaStyle
+// uses in the other direction: here a bigger number is the good one, so the
+// bands are matched from the top down and anything below the last one is red.
+func rateStyle(bps float64) lipgloss.Style {
+	for _, band := range rateBands {
+		if bps >= band.bps {
+			return band.style
+		}
+	}
+	return styleError
+}
+
 // sparkLevels are the bar heights a sparkline draws with, shortest first. All
 // of them stand for a transfer: an empty bucket draws no bar at all, so the
 // shortest one is free to mean "barely anything" rather than "nothing".

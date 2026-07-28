@@ -95,6 +95,29 @@ func TestStatusbarShowsActiveFileProgress(t *testing.T) {
 	}
 }
 
+// The rate ramp runs the opposite way to the quota one: fast is the good end.
+func TestRateStyleGradesSpeedFromFastToSlow(t *testing.T) {
+	for _, tc := range []struct {
+		rate float64
+		want lipgloss.Style
+		name string
+	}{
+		{9 << 20, styleOK, "fast"},
+		{4 << 20, styleOK, "at the green threshold"},
+		{(4 << 20) - 1, stylePartial, "just under it"},
+		{2 << 20, stylePartial, "healthy"},
+		{512 << 10, styleWarn, "slow"},
+		{64 << 10, styleError, "crawling"},
+		{0, styleError, "stalled"},
+	} {
+		got := rateStyle(tc.rate)
+		if got.GetForeground() != tc.want.GetForeground() {
+			t.Fatalf("rateStyle(%s) foreground = %v, want %v",
+				tc.name, got.GetForeground(), tc.want.GetForeground())
+		}
+	}
+}
+
 func TestStatusbarBarStaysPutAsNumbersChange(t *testing.T) {
 	barAt := func(done int64, rate float64) int {
 		snap := engine.Snapshot{
