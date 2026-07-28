@@ -256,6 +256,25 @@ func TestStatusbarMarksHeldQueueHead(t *testing.T) {
 	if !strings.Contains(got, wantBar) {
 		t.Fatalf("statusbar = %q, want orange progress bar %q", got, wantBar)
 	}
+	if detail := ansi.Strip(app.downloads.detailView(app.width)); strings.Contains(detail, "PAUSED") {
+		t.Fatalf("detail = %q, want no redundant paused notice above the file strip", detail)
+	}
+}
+
+func TestPausedNoticeShownWithoutStatusbarFile(t *testing.T) {
+	app, database, files := queueBarApp(t, 0)
+	if err := database.SetDownloadQueued(files[0].DownloadID, false); err != nil {
+		t.Fatal(err)
+	}
+	app.downloads.reload()
+	app.eng.SetPaused(true)
+
+	if bar := app.statusbarView(); bar != "" {
+		t.Fatalf("statusbar = %q, want empty", bar)
+	}
+	if detail := ansi.Strip(app.downloads.detailView(app.width)); !strings.Contains(detail, "PAUSED") {
+		t.Fatalf("detail = %q, want paused notice when no file strip is present", detail)
+	}
 }
 
 // The strip follows the queue rather than the last thing fetched, so it moves

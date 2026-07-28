@@ -1482,7 +1482,10 @@ func (m *downloadsModel) detailView(width int) string {
 		lines = append(lines, " "+styleError.Render("QUOTA — mega is throttling, retrying"))
 	}
 
-	if snap.Paused {
+	// The held queue head already says the same thing more precisely in the
+	// status bar, with its paused marker and progress. Keep the standalone
+	// notice for pauses that have no file strip to carry that state.
+	if snap.Paused && m.app.statusbarView() == "" {
 		label := "PAUSED"
 		if snap.PauseReason != "" {
 			// a pause the engine imposed, so say what stopped the queue
