@@ -107,9 +107,9 @@ func cursorBar(selected, focused bool) string {
 		return "  "
 	}
 	if focused {
-		return styleCursor.Render("▌") + " "
+		return styleCursor.Render("█") + " "
 	}
-	return styleDim.Render("▌") + " "
+	return styleDim.Render("█") + " "
 }
 
 // tintRow lays styleRowTint's background under a line that is already styled,
