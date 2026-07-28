@@ -1509,7 +1509,7 @@ func fileMarker(st fileMarkerState, spin string) string {
 	case st.paused:
 		return styleWarn.Render(text)
 	case st.queued:
-		return styleDim.Render(text)
+		return styleQueued.Render(text)
 	case st.frac > 0:
 		return stylePartial.Render(text)
 	}
@@ -1622,7 +1622,7 @@ func dlMarker(st dlMarkerState, spin string) string {
 	case st.queued && st.head && st.paused:
 		return styleWarn.Render(text)
 	case st.queued:
-		return styleDim.Render(text)
+		return styleQueued.Render(text)
 	case st.complete:
 		return styleOK.Render(text)
 	case st.anyBytes:
