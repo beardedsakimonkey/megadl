@@ -513,15 +513,18 @@ func TestFooterDividerCarriesNoticesAndStrip(t *testing.T) {
 	if got := lines[0]; got != app.paneRule("┴") {
 		t.Fatalf("footer starts with %q, want the divider", ansi.Strip(got))
 	}
-	if len(lines) != 5 {
-		t.Fatalf("footer = %q, want divider, notice, strip, divider and help", lines)
+	if len(lines) != 6 {
+		t.Fatalf("footer = %q, want divider, notice, divider, strip, divider and help", lines)
 	}
 	if !strings.Contains(ansi.Strip(lines[1]), "copied url") {
 		t.Fatalf("footer line 1 = %q, want the notice", ansi.Strip(lines[1]))
 	}
-	// the strip is fenced below as well, so the shortcuts sit outside the band
-	if got := ansi.Strip(lines[3]); got != strings.Repeat("─", app.width) {
-		t.Fatalf("footer line 3 = %q, want the rule closing the strip", got)
+	// the notice sits above the strip's own rule rather than inside its band,
+	// and the strip is fenced below as well so the shortcuts sit outside it
+	for _, i := range []int{2, 4} {
+		if got := ansi.Strip(lines[i]); got != strings.Repeat("─", app.width) {
+			t.Fatalf("footer line %d = %q, want a rule fencing the strip", i, got)
+		}
 	}
 	if body := app.downloads.view(app.width, app.bodyHeight); strings.Contains(body, "copied url") {
 		t.Fatal("the notice belongs under the divider, not in the panes")

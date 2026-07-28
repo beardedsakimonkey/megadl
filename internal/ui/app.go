@@ -268,7 +268,7 @@ func (a *App) View() string {
 func (a *App) headerView() string {
 	title := styleLogoMark.Render(" ◣◥◤◢ ") +
 		stylePrimaryText.Bold(true).Render("ＭＥＧＡ") +
-		styleHelpKey.Bold(true).Render("ＤＬ™")
+		styleHelpKey.Bold(true).Render("ＤＬ")
 	quota := styleDim.Render("↓ ") +
 		quotaStyle(a.quota6h).Bold(true).Render(fmt.Sprintf("%.1f", float64(a.quota6h)/(1<<30))) +
 		styleDim.Render(" GiB")
@@ -309,24 +309,31 @@ func (a *App) sparkView() string {
 }
 
 // footerView draws everything under the panes: notices and the transfer strip
-// sit in a band of their own, fenced off by the pane rule above and a second
-// rule below, with the shortcuts under it. With nothing to fence the band
-// collapses and the shortcuts hang straight off the pane rule.
+// each sit in a band of their own, fenced off by the pane rule above and a rule
+// below, with the shortcuts under it. Every rule belongs to the band beneath it,
+// so a band that has nothing to say takes its rule with it: with neither notice
+// nor strip the shortcuts hang straight off the pane rule.
 func (a *App) footerView() string {
 	line := a.helpLine()
 	if pad := (a.width - lipgloss.Width(line)) / 2; pad > 0 {
 		line = strings.Repeat(" ", pad) + line
 	}
 
+	rule := styleDim.Render(strings.Repeat("─", max(1, a.width)))
 	parts := []string{a.paneRule("┴")}
 	if detail := a.downloads.detailView(a.width); detail != "" {
 		parts = append(parts, detail)
 	}
 	if bar := a.statusbarView(); bar != "" {
+		// the strip gets its own fence, so a notice above it reads as a
+		// separate line rather than another row of the transfer band
+		if len(parts) > 1 {
+			parts = append(parts, rule)
+		}
 		parts = append(parts, bar)
 	}
 	if len(parts) > 1 {
-		parts = append(parts, styleDim.Render(strings.Repeat("─", max(1, a.width))))
+		parts = append(parts, rule)
 	}
 	return strings.Join(append(parts, line), "\n")
 }
