@@ -548,7 +548,6 @@ func (m *downloadsModel) toggleDownload() {
 		m.notice = "download already complete"
 	default:
 		m.app.eng.Enqueue(dl.ID)
-		m.notePaused()
 	}
 }
 
@@ -608,7 +607,6 @@ func (m *downloadsModel) toggleFolder() {
 		m.app.eng.DequeueFiles(ids)
 	} else {
 		m.app.eng.QueueFiles(ids)
-		m.notePaused()
 	}
 	m.reload()
 }
@@ -629,17 +627,7 @@ func (m *downloadsModel) toggleFile() {
 		m.reload()
 	default:
 		m.app.eng.QueueFile(f.ID)
-		m.notePaused()
 		m.reload()
-	}
-}
-
-// notePaused explains why a download just added to the queue isn't moving.
-// Queueing deliberately doesn't release the pause: holding the queue is the
-// user's decision, not a side effect of picking files.
-func (m *downloadsModel) notePaused() {
-	if m.app.eng.Paused() {
-		m.notice = "queued — the download queue is paused, press p/space to resume"
 	}
 }
 

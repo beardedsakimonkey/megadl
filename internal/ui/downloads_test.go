@@ -1288,29 +1288,6 @@ func TestEnterOnFileOfUnqueuedDownloadQueuesItAgain(t *testing.T) {
 	}
 }
 
-// Pausing is the user's decision, so adding to the queue must not quietly
-// release it — but the notice has to say why nothing started.
-func TestQueueingWhilePausedExplainsItself(t *testing.T) {
-	app, database, id := toggleTestApp(t)
-	if err := database.SetDownloadQueued(id, false); err != nil {
-		t.Fatal(err)
-	}
-	app.eng.SetPaused(true)
-	m := &app.downloads
-	m.reload()
-
-	m.update(tea.KeyMsg{Type: tea.KeyEnter})
-	if !queued(t, database, id) {
-		t.Fatal("download not queued")
-	}
-	if !app.eng.Paused() {
-		t.Fatal("queueing released the pause")
-	}
-	if !strings.Contains(m.notice, "paused") {
-		t.Fatalf("notice = %q, want it to mention the pause", m.notice)
-	}
-}
-
 // Both pause keys hold and release the queue wherever the cursor happens to be.
 func TestPauseKeysTogglePause(t *testing.T) {
 	for _, key := range []tea.KeyMsg{
