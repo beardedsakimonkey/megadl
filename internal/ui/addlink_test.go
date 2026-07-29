@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"megadl/internal/config"
 	"megadl/internal/db"
@@ -251,24 +252,17 @@ func TestAddlinkDecodesBase64LinkAndAnimatesReveal(t *testing.T) {
 	}
 }
 
-func TestAddlinkColorsBase64InputOrange(t *testing.T) {
+func TestAddlinkColorsOnlyMegaLinkInputOrange(t *testing.T) {
 	app, _ := openAddlinkTestApp(t)
 	link := "https://mega.nz/file/EEEEEEEE#0123456789abcdefghijkl"
 	encoded := base64.StdEncoding.EncodeToString([]byte(link))
 
 	m := newAddlinkModel(app)
 	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(encoded)})
-	if got := m.urlInput.TextStyle.GetForeground(); got != colorOrange {
-		t.Fatalf("foreground after paste = %v, want %v", got, colorOrange)
-	}
-
-	// breaking the base64 clears the hint
-	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	if got := m.urlInput.TextStyle.GetForeground(); got == colorOrange {
-		t.Fatalf("foreground after edit = %v, want default", got)
+		t.Fatalf("foreground after base64 paste = %v, want default", got)
 	}
 
-	// plain mega links are orange too
 	m = newAddlinkModel(app)
 	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(link)})
 	if got := m.urlInput.TextStyle.GetForeground(); got != colorOrange {
@@ -393,6 +387,29 @@ func TestAddlinkDecodeAnimationKeepsDialogWidthStable(t *testing.T) {
 		if got := lipgloss.Width(m.view()); got != want {
 			t.Fatalf("frame %d: dialog width = %d, want %d", m.decodeFrame, got, want)
 		}
+	}
+}
+
+func TestAddlinkDecodeAnimationColorsOnlyRevealedCharacters(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	link := "https://mega.nz/file/DDDDDDDD#0123456789abcdefghijkl"
+	encoded := base64.StdEncoding.EncodeToString([]byte(link))
+
+	m := newAddlinkModel(app)
+	m.decodeSrc, m.decodeTarget = encoded, link
+
+	m.decodeFrame = 0
+	if got := m.decodeFrameView(200); got != ansi.Strip(got) {
+		t.Fatalf("initial frame is styled: %q", got)
+	}
+
+	m.decodeFrame = decodeFrames / 2
+	revealed := decodeRevealCount(link, m.decodeFrame, decodeFrames)
+	got := m.decodeFrameView(200)
+	plain := []rune(ansi.Strip(got))
+	want := styleDecode.Render(string(plain[:revealed])) + string(plain[revealed:])
+	if got != want {
+		t.Fatalf("mid-animation frame = %q, want only revealed prefix styled as %q", got, want)
 	}
 }
 

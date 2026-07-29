@@ -184,14 +184,12 @@ func (m *addlinkModel) urlInputView() string {
 	return view
 }
 
-// refreshLinkHint colors the input orange while it holds something enter can
-// act on: a valid mega link, or base64 that decodes to one.
+// refreshLinkHint colors the input orange only while it holds a mega link.
+// Encoded links remain actionable, but are left in the terminal's text color
+// until the decoded link replaces them.
 func (m *addlinkModel) refreshLinkHint() {
 	url := strings.TrimSpace(m.urlInput.Value())
 	actionable := reFileLink.MatchString(url) || reFolderLink.MatchString(url)
-	if !actionable {
-		_, actionable = decodeBase64MegaLink(url)
-	}
 	if actionable {
 		m.urlInput.TextStyle = styleDecode
 	} else {
@@ -739,9 +737,21 @@ func (m *addlinkModel) view() string {
 }
 
 func (m *addlinkModel) decodeFrameView(width int) string {
-	frame := truncate(
-		decodeAnimFrame(m.decodeSrc, m.decodeTarget, m.decodeFrame, decodeFrames),
-		width,
-	)
-	return styleDecode.Render(frame)
+	raw := decodeAnimFrame(m.decodeSrc, m.decodeTarget, m.decodeFrame, decodeFrames)
+	frame := truncate(raw, width)
+	revealed := min(decodeRevealCount(m.decodeTarget, m.decodeFrame, decodeFrames),
+		len([]rune(frame)))
+
+	// A truncation ellipsis represents hidden animation content, not a
+	// decoded character, so leave it in the default color.
+	if frame != raw && revealed == len([]rune(frame)) {
+		revealed--
+	}
+	return styleDecodeFrame(frame, revealed)
+}
+
+func styleDecodeFrame(frame string, revealed int) string {
+	runes := []rune(frame)
+	revealed = max(0, min(revealed, len(runes)))
+	return styleDecode.Render(string(runes[:revealed])) + string(runes[revealed:])
 }
