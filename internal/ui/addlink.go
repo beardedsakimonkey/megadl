@@ -611,11 +611,12 @@ func (m *addlinkModel) enqueue(rawName string) error {
 		}
 	}
 
-	if _, err := m.app.db.InsertDownload(dl, files); err != nil {
+	id, err := m.app.db.InsertDownload(dl, files)
+	if err != nil {
 		return err
 	}
 	m.app.eng.Kick()
-	m.app.downloads.reload()
+	m.app.downloads.selectNewDownload(id)
 	return nil
 }
 

@@ -107,6 +107,70 @@ func TestAddlinkEnqueuesWithoutNamePromptWhenNameIsFree(t *testing.T) {
 	}
 }
 
+func TestAddlinkFocusesNewDownload(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+	for _, name := range []string{"first.zip", "second.zip"} {
+		if _, err := database.InsertDownload(&db.Download{
+			URL:      "https://mega.nz/file/" + name,
+			Handle:   name,
+			LinkType: "file",
+			Name:     name,
+			DestPath: filepath.Join(app.cfg.DownloadDir, name),
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app.downloads.reload()
+	app.downloads.cursor = len(app.downloads.rows) - 1
+
+	url := "https://mega.nz/file/AAAAAAAA#key"
+	m := newAddlinkModel(app)
+	m.url, m.linkType, m.state = url, "file", stateListing
+	model, cmd := m.update(listResultMsg{
+		url: url,
+		nodes: []mega.Node{{
+			Path: "/new.zip", Name: "new.zip", Type: "file",
+			Handle: "new-root", Size: 10,
+		}},
+	})
+	if model != nil || cmd != nil {
+		t.Fatalf("free name should close modal: model=%+v, cmd=%v", model, cmd)
+	}
+
+	focused := app.downloads.rows[app.downloads.cursor]
+	if focused.Handle != "new-root" {
+		t.Fatalf("focused download = %q, want newly added download", focused.Handle)
+	}
+	if app.downloads.pane != paneFiles {
+		t.Fatalf("focused pane = %v, want files pane", app.downloads.pane)
+	}
+	if app.downloads.treeCursor != 0 {
+		t.Fatalf("focused file row = %d, want first row", app.downloads.treeCursor)
+	}
+	fileIndex := app.downloads.cursorFile()
+	if fileIndex < 0 {
+		t.Fatal("first file row is not focused")
+	}
+	file := app.downloads.files[fileIndex]
+	if file.NodeHandle != "new-root" {
+		t.Fatalf("focused file = %q, want first file in new download", file.NodeHandle)
+	}
+	selected, err := database.SelectedDownload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != focused.ID {
+		t.Fatalf("saved selection = %d, want new download %d", selected, focused.ID)
+	}
+	filesPane, err := database.FilesPaneSelected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filesPane {
+		t.Fatal("saved pane selection = downloads, want files")
+	}
+}
+
 // A folder link keeps the picker; only the name prompt behind it is skipped.
 func TestAddlinkEnqueuesFromPickerWithoutNamePrompt(t *testing.T) {
 	app, database := openAddlinkTestApp(t)
