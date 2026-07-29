@@ -734,8 +734,8 @@ func (m *downloadsModel) mouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
-// clickDownload selects the download on body row y; clicking the selected
-// row again moves focus to its files, the way l does.
+// clickDownload selects the download on body row y and toggles its queue
+// membership on a double click.
 func (m *downloadsModel) clickDownload(y int) {
 	i := m.scroll + y
 	if i >= len(m.rows) {
@@ -743,13 +743,14 @@ func (m *downloadsModel) clickDownload(y int) {
 	}
 	double := m.clicks.press(clickDownload, i)
 	m.selectRow(i)
-	if double && len(m.files) > 0 {
-		m.pane = paneFiles
+	if double {
+		m.toggleDownload()
 	}
 }
 
 // clickFile selects the row on body row y of the file pane — a file or a
-// directory header, both being focusable — and plays a file on a double click.
+// directory header, both being focusable — and toggles a file's queue
+// membership on a double click.
 func (m *downloadsModel) clickFile(y int) tea.Cmd {
 	if y == 0 || m.cursor >= len(m.rows) {
 		return nil // pane title
@@ -761,7 +762,7 @@ func (m *downloadsModel) clickFile(y int) tea.Cmd {
 	double := m.clicks.press(clickFile, i)
 	m.selectTreeRow(i)
 	if double && m.tree[i].dir == "" {
-		return m.openSelectedFile()
+		m.toggleFile()
 	}
 	return nil
 }

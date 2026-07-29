@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -127,9 +126,10 @@ func TestClicksOutsideTheBodyAreIgnored(t *testing.T) {
 	}
 }
 
-func TestDoubleClickOnDownloadOpensItsFiles(t *testing.T) {
+func TestDoubleClickTogglesDownloadQueueMembership(t *testing.T) {
 	app := mouseApp(t)
 	m := &app.downloads
+	downloadID := m.rows[0].ID
 	now, advance := fakeClock()
 	m.clicks.now = now
 
@@ -140,14 +140,23 @@ func TestDoubleClickOnDownloadOpensItsFiles(t *testing.T) {
 	advance(doubleClickInterval / 2)
 	app.Update(leftClick(2, app.bodyTop))
 
-	if m.pane != paneFiles {
-		t.Fatalf("pane = %v, want the file pane after a double click", m.pane)
+	if queued(t, app.db, downloadID) {
+		t.Fatal("download still queued after the first double click")
+	}
+
+	m.reload()
+	app.Update(leftClick(2, app.bodyTop))
+	advance(doubleClickInterval / 2)
+	app.Update(leftClick(2, app.bodyTop))
+	if !queued(t, app.db, downloadID) {
+		t.Fatal("download not queued again after the second double click")
 	}
 }
 
-func TestSlowSecondClickOnDownloadDoesNotOpenFiles(t *testing.T) {
+func TestSlowSecondClickOnDownloadDoesNotToggleQueue(t *testing.T) {
 	app := mouseApp(t)
 	m := &app.downloads
+	downloadID := m.rows[0].ID
 	now, advance := fakeClock()
 	m.clicks.now = now
 
@@ -155,8 +164,8 @@ func TestSlowSecondClickOnDownloadDoesNotOpenFiles(t *testing.T) {
 	advance(doubleClickInterval + time.Millisecond)
 	app.Update(leftClick(2, app.bodyTop))
 
-	if m.pane != paneList {
-		t.Fatalf("pane = %v, want the downloads pane to keep focus", m.pane)
+	if !queued(t, app.db, downloadID) {
+		t.Fatal("slow second click removed the download from the queue")
 	}
 }
 
@@ -232,35 +241,36 @@ func TestClickSelectsFileRow(t *testing.T) {
 	}
 }
 
-func TestDoubleClickPlaysFile(t *testing.T) {
-	dir := t.TempDir()
-	m, opened := filePaneModel(t, dir)
-	path := filepath.Join(dir, "readme.txt")
-	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+func TestDoubleClickTogglesFileQueueMembership(t *testing.T) {
+	app, database, _ := toggleTestApp(t)
+	m := &app.downloads
+	m.view(80, 12)
+	fileID := m.files[0].ID
 	now, advance := fakeClock()
 	m.clicks.now = now
 
-	m.mouse(leftClick(m.listW+4, 4))
+	if cmd := m.mouse(leftClick(m.listW+4, 1)); cmd != nil {
+		t.Fatalf("single click on a file returned a command: %v", cmd)
+	}
 	advance(doubleClickInterval / 2)
-	cmd := m.mouse(leftClick(m.listW+4, 4))
-	if cmd == nil {
-		t.Fatal("double click on a file returned no command")
+	if cmd := m.mouse(leftClick(m.listW+4, 1)); cmd != nil {
+		t.Fatalf("double click on a file returned a command: %v", cmd)
 	}
-	m.update(cmd())
+	if f, err := database.File(fileID); err != nil || f.Queued {
+		t.Fatalf("file after first double click = %v (err %v), want out of the queue", f, err)
+	}
 
-	if len(*opened) != 1 || (*opened)[0] != path {
-		t.Fatalf("opened files = %v, want %q", *opened, path)
-	}
-	if !strings.Contains(m.notice, "playing readme.txt") {
-		t.Fatalf("notice = %q, want playing confirmation", m.notice)
+	m.mouse(leftClick(m.listW+4, 1))
+	advance(doubleClickInterval / 2)
+	m.mouse(leftClick(m.listW+4, 1))
+	if f, err := database.File(fileID); err != nil || !f.Queued {
+		t.Fatalf("file after second double click = %v (err %v), want queued", f, err)
 	}
 }
 
-// Double clicking a directory header only selects; it must not start playing
-// the file it selected.
-func TestDoubleClickOnDirectoryHeaderPlaysNothing(t *testing.T) {
+// Double clicking a directory header only selects; it must not toggle the
+// files under it.
+func TestDoubleClickOnDirectoryHeaderDoesNotToggleFiles(t *testing.T) {
 	m, _ := filePaneModel(t, t.TempDir())
 	now, advance := fakeClock()
 	m.clicks.now = now
@@ -269,6 +279,9 @@ func TestDoubleClickOnDirectoryHeaderPlaysNothing(t *testing.T) {
 	advance(doubleClickInterval / 2)
 	if cmd := m.mouse(leftClick(m.listW+4, 1)); cmd != nil {
 		t.Fatalf("double click on a directory header returned a command: %v", cmd)
+	}
+	if m.notice != "" {
+		t.Fatalf("double click on a directory header set notice %q", m.notice)
 	}
 }
 
