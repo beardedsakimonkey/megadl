@@ -59,10 +59,10 @@ func TestRenderModalPutsTitleInTopBorder(t *testing.T) {
 	got := ansi.Strip(renderModal("Delete download", "some name\nsecond line"))
 	lines := strings.Split(got, "\n")
 
-	if want := "┌─ Delete download ─"; !strings.HasPrefix(lines[0], want) {
+	if want := "╔═ Delete download ═"; !strings.HasPrefix(lines[0], want) {
 		t.Fatalf("top border = %q, want prefix %q", lines[0], want)
 	}
-	if !strings.HasSuffix(lines[0], "─┐") {
+	if !strings.HasSuffix(lines[0], "═╗") {
 		t.Fatalf("top border = %q, want it to close with the corner", lines[0])
 	}
 	if strings.Contains(strings.Join(lines[1:], "\n"), "Delete download") {
@@ -84,7 +84,7 @@ func TestRenderModalWidensForLongTitle(t *testing.T) {
 	if !strings.Contains(lines[0], title) {
 		t.Fatalf("top border = %q, want it to carry %q", lines[0], title)
 	}
-	if !strings.HasSuffix(lines[0], "─┐") {
+	if !strings.HasSuffix(lines[0], "═╗") {
 		t.Fatalf("top border = %q, want a dash before the corner", lines[0])
 	}
 }

@@ -57,9 +57,14 @@ var (
 	// which a dithered ░ neighbour could never match.
 	styleProgressTrack = lipgloss.NewStyle().Foreground(colorTrack)
 
-	styleModal = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).
+	styleModal = lipgloss.NewStyle().Border(modalBorder).
 			BorderForeground(colorPrimary).Padding(1, 2)
 )
+
+// modalBorder frames every dialog. modalTopBorder redraws the top edge by hand
+// to set the title into it, so the border lives here rather than inline in the
+// style: both drawings have to use the same glyphs or the corners won't meet.
+var modalBorder = lipgloss.DoubleBorder()
 
 // modalTitleFrame is what a titled top border spends on everything that isn't
 // the title: two corners, the dash before the label, a space either side of
@@ -69,7 +74,7 @@ const modalTitleFrame = 6
 // renderModal frames body in styleModal with title set into the top border
 // rather than written on the first body row:
 //
-//	┌─ Rename download ──────────┐
+//	╔═ Rename download ══════════╗
 //
 // The frame never comes out narrower than the title needs up there, so a
 // dialog with a short body still shows its whole heading.
@@ -90,7 +95,7 @@ func renderModal(title, body string) string {
 // keeps the modal's color and the title the heading's, so the label reads as
 // text sitting in the rule rather than as part of it.
 func modalTopBorder(title string, width int) string {
-	border := lipgloss.NormalBorder()
+	border := modalBorder
 	edge := lipgloss.NewStyle().Foreground(colorPrimary)
 	dashes := func(n int) string { return strings.Repeat(border.Top, max(0, n)) }
 	if title == "" || width < modalTitleFrame {
