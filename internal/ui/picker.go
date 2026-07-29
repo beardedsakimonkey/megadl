@@ -216,6 +216,6 @@ func (p *pickerModel) view(width, height int) string {
 	}
 
 	count, bytes := p.totals()
-	b.WriteString(styleAccent.Render(fmt.Sprintf("\n%d files selected, %s", count, humanBytes(bytes))))
+	b.WriteString(styleNotice.Render(fmt.Sprintf("\n%d files selected, %s", count, humanBytes(bytes))))
 	return b.String()
 }
