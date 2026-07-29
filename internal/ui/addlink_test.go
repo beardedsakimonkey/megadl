@@ -194,8 +194,9 @@ func TestEnqueueRejectsResourceAddedAfterListing(t *testing.T) {
 	}
 }
 
-func TestDecodeBase64MegaLink(t *testing.T) {
+func TestDecodeBase64Text(t *testing.T) {
 	link := "https://mega.nz/folder/AAAAAAAA#0123456789abcdefghijkl"
+	protected := "https://lnk.snahp.eu/g5dZzax2Q2rYwGnwApWzOm1oo3LcOGtsZoU09"
 	once := base64.StdEncoding.EncodeToString([]byte(link))
 	tests := []struct {
 		name  string
@@ -208,15 +209,17 @@ func TestDecodeBase64MegaLink(t *testing.T) {
 		{"double encoded", base64.StdEncoding.EncodeToString([]byte(once)), link, true},
 		{"wrapped paste", once[:20] + "\n " + once[20:], link, true},
 		{"decoded padding trimmed", base64.StdEncoding.EncodeToString([]byte("  " + link + "\n")), link, true},
+		{"non-MEGA URL", " aHR0cHM6Ly9sbmsuc25haHAuZXUvZzVkWnpheDJRMnJZd0dud0FwV3pPbTFvbzNMY09HdHNab1UwOQ==", protected, true},
+		{"ordinary text", base64.StdEncoding.EncodeToString([]byte("some perfectly ordinary text")), "some perfectly ordinary text", true},
+		{"short text", base64.StdEncoding.EncodeToString([]byte("hello")), "hello", true},
 		{"plain link", link, "", false},
 		{"free text", "not a link at all", "", false},
-		{"base64 of garbage", base64.StdEncoding.EncodeToString([]byte("some perfectly ordinary text")), "", false},
 		{"empty", "", "", false},
 	}
 	for _, tt := range tests {
-		got, ok := decodeBase64MegaLink(tt.input)
+		got, ok := decodeBase64Text(tt.input)
 		if ok != tt.ok || got != tt.want {
-			t.Errorf("%s: decodeBase64MegaLink(%q) = %q, %v; want %q, %v",
+			t.Errorf("%s: decodeBase64Text(%q) = %q, %v; want %q, %v",
 				tt.name, tt.input, got, ok, tt.want, tt.ok)
 		}
 	}
@@ -249,6 +252,30 @@ func TestAddlinkDecodesBase64LinkAndAnimatesReveal(t *testing.T) {
 	m.update(decodeFrameMsg{seq: m.decodeSeq - 1})
 	if m.state != stateURL || m.urlInput.Value() != link {
 		t.Fatalf("after stale frame: state=%v input=%q", m.state, m.urlInput.Value())
+	}
+}
+
+func TestAddlinkDecodesBase64NonMegaURL(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	encoded := " aHR0cHM6Ly9sbmsuc25haHAuZXUvZzVkWnpheDJRMnJZd0dud0FwV3pPbTFvbzNMY09HdHNab1UwOQ=="
+	want := "https://lnk.snahp.eu/g5dZzax2Q2rYwGnwApWzOm1oo3LcOGtsZoU09"
+
+	m := newAddlinkModel(app)
+	m.urlInput.SetValue(encoded)
+	_, cmd := m.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.state != stateDecoding || m.decodeTarget != want || m.errMsg != "" || cmd == nil {
+		t.Fatalf("after submit: state=%v target=%q err=%q cmd=%v",
+			m.state, m.decodeTarget, m.errMsg, cmd)
+	}
+
+	m.finishDecode()
+	if m.state != stateURL || m.urlInput.Value() != want {
+		t.Fatalf("after decode: state=%v input=%q", m.state, m.urlInput.Value())
+	}
+
+	m.updateKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.state != stateURL || m.errMsg == "" {
+		t.Fatalf("after submitting decoded non-MEGA text: state=%v err=%q", m.state, m.errMsg)
 	}
 }
 

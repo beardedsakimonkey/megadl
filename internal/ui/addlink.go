@@ -220,8 +220,9 @@ func (m *addlinkModel) finishDecode() tea.Cmd {
 	return textinput.Blink
 }
 
-// submitURL acts on the link the user pressed enter on: a mega link starts
-// listing, base64 that hides one starts the decode animation instead.
+// submitURL acts on the text the user pressed enter on: a MEGA link starts
+// listing, while base64-encoded text starts the decode animation. The revealed
+// text can then be reviewed and submitted independently.
 func (m *addlinkModel) submitURL(url string) (*addlinkModel, tea.Cmd) {
 	switch {
 	case reFileLink.MatchString(url):
@@ -229,7 +230,7 @@ func (m *addlinkModel) submitURL(url string) (*addlinkModel, tea.Cmd) {
 	case reFolderLink.MatchString(url):
 		m.linkType = "folder"
 	default:
-		if decoded, ok := decodeBase64MegaLink(url); ok {
+		if decoded, ok := decodeBase64Text(url); ok {
 			m.decodeSrc = url
 			m.decodeTarget = decoded
 			m.errMsg = ""

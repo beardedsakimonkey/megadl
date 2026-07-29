@@ -12,21 +12,22 @@ import (
 // once or twice, so allow a little headroom without decoding forever.
 const maxDecodeDepth = 3
 
-// decodeBase64MegaLink reports whether s is a base64 encoding (possibly
-// nested) of a mega.nz file or folder link, returning the decoded link.
-func decodeBase64MegaLink(s string) (string, bool) {
+// decodeBase64Text reports whether s is base64-encoded UTF-8 text and returns
+// the innermost decoded value. What that text represents is deliberately left
+// for submission after the user has reviewed it.
+func decodeBase64Text(s string) (string, bool) {
 	cur := s
 	for depth := 0; depth < maxDecodeDepth; depth++ {
 		decoded, ok := base64Decode(cur)
 		if !ok {
-			return "", false
+			if depth == 0 {
+				return "", false
+			}
+			return strings.TrimSpace(cur), true
 		}
-		if reFileLink.MatchString(decoded) || reFolderLink.MatchString(decoded) {
-			return strings.TrimSpace(decoded), true
-		}
-		cur = decoded
+		cur = strings.TrimSpace(decoded)
 	}
-	return "", false
+	return cur, true
 }
 
 var base64Encodings = []*base64.Encoding{
@@ -38,9 +39,7 @@ var base64Encodings = []*base64.Encoding{
 // Whitespace is stripped first so wrapped pastes still decode.
 func base64Decode(s string) (string, bool) {
 	s = strings.Join(strings.Fields(s), "")
-	// the shortest plausible encoding of a mega.nz link; rejects short
-	// free-text input before it can accidentally decode
-	if len(s) < 24 {
+	if s == "" {
 		return "", false
 	}
 	for _, enc := range base64Encodings {
