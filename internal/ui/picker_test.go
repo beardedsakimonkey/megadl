@@ -2,7 +2,10 @@ package ui
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"megadl/internal/mega"
 )
@@ -75,5 +78,26 @@ func TestPickerFolderToggle(t *testing.T) {
 	p.toggle(1)
 	if c, _ := p.totals(); c != 0 {
 		t.Fatalf("re-toggle should clear, count=%d", c)
+	}
+}
+
+func TestPickerViewUsesIntentMarkersOnlyForFiles(t *testing.T) {
+	p := newPicker(testNodes())
+	p.toggle(3)
+
+	lines := strings.Split(ansi.Strip(p.view(80, len(p.rows))), "\n")
+	if got := lines[0]; !strings.Contains(got, "Root/") ||
+		strings.ContainsAny(got, queuedGlyph+emptyGlyph) {
+		t.Fatalf("root row = %q, want an unmarked folder", got)
+	}
+	if got := lines[1]; !strings.Contains(got, "S01/") ||
+		strings.ContainsAny(got, queuedGlyph+emptyGlyph) {
+		t.Fatalf("nested folder row = %q, want an unmarked folder", got)
+	}
+	if got := lines[2]; !strings.Contains(got, queuedGlyph+" e01.mkv") {
+		t.Fatalf("selected file row = %q, want download-intent marker", got)
+	}
+	if got := lines[3]; !strings.Contains(got, emptyGlyph+" e02.mkv") {
+		t.Fatalf("unselected file row = %q, want no-intent marker", got)
 	}
 }

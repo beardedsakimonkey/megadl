@@ -177,29 +177,24 @@ func (p *pickerModel) view(width, height int) string {
 	bandW := 0
 	for i := p.offset; i < endRow; i++ {
 		row := p.rows[i]
-		var box string
-		if row.node.IsDir() {
-			switch p.folderState(i) {
-			case 2:
-				box = "[x]"
-			case 1:
-				box = "[~]"
-			default:
-				box = "[ ]"
-			}
-		} else if p.selected[row.node.Handle] {
-			box = "[x]"
-		} else {
-			box = "[ ]"
-		}
-
 		name := row.node.Name
 		if row.node.IsDir() {
 			name += "/"
 		}
-		line := fmt.Sprintf("%s%s%s %s", cursorBar(i == p.cursor, true, cursorFull),
-			strings.Repeat("  ", row.depth), box,
-			truncate(name, max(10, width-22-2*row.depth)))
+		line := cursorBar(i == p.cursor, true, cursorFull) +
+			strings.Repeat("  ", row.depth)
+		if !row.node.IsDir() {
+			marker := styleDim.Render(emptyGlyph)
+			if p.selected[row.node.Handle] {
+				marker = styleQueued.Render(queuedGlyph)
+			}
+			line += marker + " "
+		}
+		name = truncate(name, max(10, width-20-2*row.depth))
+		if row.node.IsDir() {
+			name = styleDirectory.Render(name)
+		}
+		line += name
 		if !row.node.IsDir() {
 			line += styleDim.Render("  " + humanBytes(row.node.Size))
 		}
