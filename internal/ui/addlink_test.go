@@ -34,7 +34,7 @@ func openAddlinkTestApp(t *testing.T) (*App, *db.DB) {
 	return app, database
 }
 
-func TestAddlinkSuggestsExistingResourceInsteadOfDuplicate(t *testing.T) {
+func TestAddlinkKeepsPromptOpenWhenResourceIsAlreadyInLibrary(t *testing.T) {
 	app, database := openAddlinkTestApp(t)
 	id, err := database.InsertDownload(&db.Download{
 		URL:      "https://mega.nz/folder/AAAAAAAA#old",
@@ -54,27 +54,31 @@ func TestAddlinkSuggestsExistingResourceInsteadOfDuplicate(t *testing.T) {
 	url := "https://mega.nz/folder/AAAAAAAA#new"
 	m := newAddlinkModel(app)
 	m.url, m.linkType, m.state = url, "folder", stateListing
-	model, cmd := m.update(listResultMsg{
+	m.urlInput.SetValue(url)
+	model, _ := m.update(listResultMsg{
 		url: url,
 		nodes: []mega.Node{{
 			Path: "/Skins", Name: "Skins", Type: "folder", Handle: "root",
 		}},
 	})
-	if cmd != nil || model.state != stateExisting || model.existing == nil || model.existing.ID != id {
-		t.Fatalf("existing state = %+v, cmd=%v", model, cmd)
+	if model == nil || model.state != stateURL {
+		t.Fatalf("state = %+v, want the url prompt", model)
+	}
+	if !strings.Contains(model.errMsg, "Skins") {
+		t.Fatalf("errMsg = %q, want it to name the existing download", model.errMsg)
+	}
+	if got := model.urlInput.Value(); got != url {
+		t.Fatalf("url input = %q, want the submitted link %q", got, url)
 	}
 
-	model, cmd = model.update(tea.KeyMsg{Type: tea.KeyEnter})
-	if model != nil || cmd != nil {
-		t.Fatalf("reuse should close modal: model=%+v, cmd=%v", model, cmd)
+	// typing again clears the error, and nothing was added to the library
+	model, _ = model.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if model.errMsg != "" {
+		t.Fatalf("errMsg after editing = %q, want it cleared", model.errMsg)
 	}
 	rows, err := database.Downloads()
-	if err != nil || len(rows) != 1 {
-		t.Fatalf("downloads after reuse = %+v, %v", rows, err)
-	}
-	if app.downloads.rows[app.downloads.cursor].ID != id {
-		t.Fatalf("selected download = %d, want %d",
-			app.downloads.rows[app.downloads.cursor].ID, id)
+	if err != nil || len(rows) != 1 || rows[0].ID != id {
+		t.Fatalf("downloads after duplicate = %+v, %v", rows, err)
 	}
 }
 
@@ -249,7 +253,7 @@ func TestEnqueueRejectsResourceAddedAfterListing(t *testing.T) {
 	}}
 
 	err := m.enqueue("skins (2).zip")
-	if err == nil || !strings.Contains(err.Error(), "reuse the existing download") {
+	if err == nil || !strings.Contains(err.Error(), "already in the library") {
 		t.Fatalf("enqueue error = %v", err)
 	}
 	rows, err := database.Downloads()
@@ -415,15 +419,6 @@ func addlinkStates(m *addlinkModel) []struct {
 			m.state, m.errMsg, m.nodes = stateName, longErr, nodes
 			m.nameInput.SetValue(strings.Repeat("name-", 12))
 			m.nameInput.CursorEnd()
-		}},
-		{"existing", func() {
-			m.state = stateExisting
-			m.existing = &db.Download{
-				Name:     strings.Repeat("album-", 12),
-				LinkType: "folder",
-				Status:   db.StatusDone,
-				DestPath: "/Users/someone/Downloads/" + strings.Repeat("album-", 12),
-			}
 		}},
 		{"failed", func() { m.state, m.errMsg = stateFailed, longErr }},
 	}

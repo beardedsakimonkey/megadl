@@ -27,7 +27,6 @@ const (
 	stateListing
 	statePicker
 	stateName
-	stateExisting
 	stateFailed
 )
 
@@ -72,7 +71,6 @@ type addlinkModel struct {
 	linkType string // "file" | "folder"
 	nodes    []mega.Node
 	picker   pickerModel
-	existing *db.Download
 	errMsg   string
 
 	// width is the dialog's content width, fixed when it opened so it never
@@ -278,9 +276,11 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 			return m, nil
 		}
 		if existing != nil {
-			m.existing = existing
-			m.state = stateExisting
-			return m, nil
+			// the link resolves to something the library already has, so the
+			// prompt keeps the link and says so, like any other bad input
+			m.state = stateURL
+			m.errMsg = fmt.Sprintf("already in the library as %q", existing.Name)
+			return m, textinput.Blink
 		}
 		if m.linkType == "folder" && !(len(msg.nodes) == 1 && !msg.nodes[0].IsDir()) {
 			m.picker = newPicker(msg.nodes)
@@ -475,20 +475,6 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 		m.nameInput, cmd = m.nameInput.Update(key)
 		return m, cmd
 
-	case stateExisting:
-		switch key.String() {
-		case "esc":
-			return nil, nil
-		case "enter":
-			m.app.downloads.selectDownload(m.existing.ID)
-			if m.existing.LinkType == "folder" {
-				m.app.downloads.setNotice("reusing existing download — press R to refresh its listing")
-			} else {
-				m.app.downloads.setNotice("reusing existing download")
-			}
-			return nil, nil
-		}
-
 	case stateFailed:
 		switch key.String() {
 		case "esc", "q":
@@ -548,7 +534,7 @@ func (m *addlinkModel) enqueue(rawName string) error {
 		return err
 	}
 	if existing != nil {
-		return fmt.Errorf("%q is already in the library; reuse the existing download", existing.Name)
+		return fmt.Errorf("already in the library as %q", existing.Name)
 	}
 
 	name := naming.Sanitize(rawName)
@@ -673,11 +659,6 @@ func (m *addlinkModel) help() string {
 			shortcut{keys: []string{"enter"}, label: "start download"},
 			shortcut{keys: []string{"esc"}, label: "back"},
 		)
-	case stateExisting:
-		return renderShortcuts(
-			shortcut{keys: []string{"enter"}, label: "reuse existing"},
-			shortcut{keys: []string{"esc"}, label: "cancel"},
-		)
 	}
 	return renderShortcuts(shortcut{keys: []string{"esc"}, label: "close"})
 }
@@ -721,15 +702,6 @@ func (m *addlinkModel) view() string {
 		if m.errMsg != "" {
 			body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
 		}
-	case stateExisting:
-		title = "Already in library"
-		body = wrap(fmt.Sprintf("%q already represents this MEGA %s.",
-			m.existing.Name, m.existing.LinkType), w) + "\n\n" +
-			styleDim.Render(fmt.Sprintf("%s  %s\n%s",
-				m.existing.Status,
-				humanBytes(m.existing.TotalBytes),
-				truncateMiddle(m.existing.DestPath, w))) +
-			"\n\n" + wrap("Reuse this download instead of creating another copy?", w)
 	case stateFailed:
 		title = "Listing failed"
 		body = styleError.Render(wrap(m.errMsg, w)) + "\n\n" +

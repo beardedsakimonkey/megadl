@@ -203,18 +203,9 @@ func (m *downloadsModel) loadHead(queue []int64) {
 	}
 }
 
-// selectDownload focuses a library row after another flow reuses it.
-func (m *downloadsModel) selectDownload(id int64) {
-	m.focusDownload(id, false)
-}
-
 // selectNewDownload focuses a newly added library row and the first item in
 // its file pane. The first tree row may be a directory header or a file.
 func (m *downloadsModel) selectNewDownload(id int64) {
-	m.focusDownload(id, true)
-}
-
-func (m *downloadsModel) focusDownload(id int64, focusFiles bool) {
 	m.reload()
 	for i, dl := range m.rows {
 		if dl.ID != id {
@@ -223,7 +214,7 @@ func (m *downloadsModel) focusDownload(id int64, focusFiles bool) {
 		m.cursor = i
 		m.pane = paneList
 		m.loadFiles()
-		if focusFiles && len(m.tree) > 0 {
+		if len(m.tree) > 0 {
 			m.treeCursor, m.treeScroll, m.cursorDir = 0, 0, ""
 			m.pane = paneFiles
 		}
