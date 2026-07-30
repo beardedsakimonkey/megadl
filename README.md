@@ -2,7 +2,7 @@
 
 A terminal UI for downloading mega.nz links and managing the resulting local
 media library. It implements the public MEGA file and folder protocols directly
-in Go.
+in Go (based on [megatools](https://xff.cz/megatools/) code).
 
 <img width="1610" height="985" alt="screenshot" src="https://github.com/user-attachments/assets/940dd58e-d451-4206-acc9-75dedfb831c3" />
 
