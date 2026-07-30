@@ -458,9 +458,9 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 			m.treeCursor = siblingRow(m.tree, m.treeCursor, 1)
 		case "z":
 			m.centerTreeCursor()
-		case "enter":
+		case " ":
 			m.toggleRow()
-		case "o":
+		case "enter":
 			return m.openSelectedFile()
 		case "r":
 			return m.startRename()
@@ -489,9 +489,9 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 		m.moveCursor(-len(m.rows))
 	case "end":
 		m.moveCursor(len(m.rows))
-	case "enter":
+	case " ":
 		m.toggleDownload()
-	case "o":
+	case "enter":
 		return m.openSelectedDownload()
 	case "right", "l":
 		if len(m.files) > 0 {
@@ -565,7 +565,7 @@ func (m *downloadsModel) dismissDetail() {
 }
 
 // queued reports whether dl is in the download queue, and so whether removing
-// it is the meaningful half of the enter toggle for it and its files.
+// it is the meaningful half of the space toggle for it and its files.
 func (m *downloadsModel) queued(dl *db.Download) bool {
 	_, ok := m.queuePos[dl.ID]
 	return ok
@@ -630,7 +630,7 @@ func (m *downloadsModel) eligibleFiles(i int) []db.File {
 }
 
 // allQueued reports whether every one of files is waiting in the queue, which
-// is what makes the s toggle on a folder take them out rather than put them in.
+// is what makes the space toggle on a folder take them out rather than put them in.
 func allQueued(files []db.File) bool {
 	for _, f := range files {
 		if !f.Queued {
@@ -871,7 +871,7 @@ func (m *downloadsModel) openSelectedFile() tea.Cmd {
 
 // openSelectedDownload plays the whole selected download: playback starts at
 // its first playable file and the rest of that file's folder is queued behind
-// it, so o on a list row plays a folder without picking a file first.
+// it, so enter on a list row plays a folder without picking a file first.
 func (m *downloadsModel) openSelectedDownload() tea.Cmd {
 	all := make([]int, len(m.files))
 	for i := range m.files {
@@ -1021,9 +1021,9 @@ func (m *downloadsModel) help() string {
 		return renderShortcuts(
 			shortcut{keys: []string{"j/k"}, label: "move"},
 			shortcut{keys: []string{"J/K"}, label: "folder"},
-			shortcut{keys: []string{"⏎"}, label: m.toggleLabel()},
-			shortcut{keys: []string{"o"}, label: "open"},
-			shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
+			shortcut{keys: []string{"space"}, label: m.toggleLabel()},
+			shortcut{keys: []string{"⏎"}, label: "open"},
+			shortcut{keys: []string{"p"}, label: m.pauseLabel()},
 			shortcut{keys: []string{"f"}, label: "focus"},
 			shortcut{keys: []string{"r"}, label: "rename"},
 			shortcut{keys: []string{"R"}, label: "refresh"},
@@ -1034,10 +1034,10 @@ func (m *downloadsModel) help() string {
 	}
 	return renderShortcuts(
 		shortcut{keys: []string{"a"}, label: "add"},
-		shortcut{keys: []string{"⏎"}, label: m.toggleLabel()},
-		shortcut{keys: []string{"o"}, label: "open"},
+		shortcut{keys: []string{"space"}, label: m.toggleLabel()},
+		shortcut{keys: []string{"⏎"}, label: "open"},
 		shortcut{keys: []string{"l"}, label: "enter"},
-		shortcut{keys: []string{"p/space"}, label: m.pauseLabel()},
+		shortcut{keys: []string{"p"}, label: m.pauseLabel()},
 		shortcut{keys: []string{"f"}, label: "focus"},
 		shortcut{keys: []string{"r"}, label: "rename"},
 		shortcut{keys: []string{"R"}, label: "refresh"},
@@ -1056,10 +1056,10 @@ func (m *downloadsModel) pauseLabel() string {
 	return "pause"
 }
 
-// toggleLabel names the half of the enter toggle that applies to what the cursor
+// toggleLabel names the half of the space toggle that applies to what the cursor
 // is on, so the footer says what pressing it will do. A folder counts as
 // queued once everything left to fetch in it is waiting, which is when
-// pressing enter would take it back out.
+// pressing space would take it back out.
 func (m *downloadsModel) toggleLabel() string {
 	if m.cursor >= len(m.rows) {
 		return "queue"
