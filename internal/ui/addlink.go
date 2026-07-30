@@ -445,9 +445,9 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 		switch key.String() {
 		case "esc":
 			return nil, nil
-		case "up", "k":
+		case "up", "k", "K":
 			m.picker.move(-1, visible)
-		case "down", "j":
+		case "down", "j", "J":
 			m.picker.move(1, visible)
 		case "pgup":
 			m.picker.move(-visible, visible)

@@ -204,6 +204,23 @@ func TestAddlinkEnqueuesFromPickerWithoutNamePrompt(t *testing.T) {
 	}
 }
 
+func TestAddlinkPickerUppercaseJKMoveCursor(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	m := newAddlinkModel(app)
+	m.state = statePicker
+	m.picker = newPicker(testNodes())
+
+	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	if m.picker.cursor != 1 {
+		t.Fatalf("J moved cursor to %d, want 1", m.picker.cursor)
+	}
+
+	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	if m.picker.cursor != 0 {
+		t.Fatalf("K moved cursor to %d, want 0", m.picker.cursor)
+	}
+}
+
 func TestAddlinkStillDisambiguatesDifferentResourceWithSameName(t *testing.T) {
 	app, database := openAddlinkTestApp(t)
 	if _, err := database.InsertDownload(&db.Download{
