@@ -331,9 +331,22 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 // pickerVisible is how many picker rows the modal shows; the scroll math and
 // the renderer have to agree on it or the cursor can drift out of view.
 func (m *addlinkModel) pickerVisible() int {
-	// two rows fewer of chrome than before the title moved into the border,
-	// so the list keeps the same margin around it and gains those two rows
-	return max(3, m.app.height-10)
+	// The picker lives in the body, whose height changes when notices and the
+	// transfer strip add rows to the footer. Beyond the file rows, its modal
+	// spends vertical space on border/padding plus the blank line and summary
+	// rendered by picker.view.
+	height := m.app.bodyHeight
+	if height <= 0 {
+		// Direct model renders in tests may happen before App.View has recorded
+		// the body geometry. Preserve the ordinary no-footer sizing in that
+		// case; App.View replaces it with the exact current-frame height.
+		height = m.app.height - 4
+	}
+	chrome := styleModal.GetVerticalFrameSize() + 2
+	if m.errMsg != "" {
+		chrome += lipgloss.Height(wrap(m.errMsg, m.width))
+	}
+	return max(3, height-chrome)
 }
 
 // pickerRowsTop is the body row the picker's first entry renders on: the

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/base64"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -451,6 +452,44 @@ func TestAddlinkDialogStopsGrowingOnWideTerminal(t *testing.T) {
 		if got := lipgloss.Width(m.view()); got > want {
 			t.Fatalf("state %s: dialog width = %d, want at most %d", state.name, got, want)
 		}
+	}
+}
+
+func TestAddlinkPickerFitsAboveVisibleNotice(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	app.width, app.height = 80, 24
+
+	nodes := []mega.Node{
+		{Path: "/Root", Name: "Root", Type: "folder", Handle: "root"},
+	}
+	for i := 0; i < 30; i++ {
+		name := fmt.Sprintf("episode-%02d.mkv", i)
+		nodes = append(nodes, mega.Node{
+			Path:   "/Root/" + name,
+			Name:   name,
+			Type:   "file",
+			Handle: fmt.Sprintf("file-%02d", i),
+			Parent: "root",
+			Size:   100,
+		})
+	}
+
+	m := newAddlinkModel(app)
+	m.state = statePicker
+	m.picker = newPicker(nodes)
+	app.addlink = m
+	app.downloads.setNotice("url copied")
+
+	view := app.View()
+	dialogHeight := lipgloss.Height(m.view())
+	if dialogHeight > app.bodyHeight {
+		t.Fatalf("dialog height = %d, want at most body height %d", dialogHeight, app.bodyHeight)
+	}
+	if m.modal.h != dialogHeight {
+		t.Fatalf("rendered modal height = %d, dialog height = %d; dialog was cropped", m.modal.h, dialogHeight)
+	}
+	if !strings.Contains(ansi.Strip(view), modalBorder.BottomLeft) {
+		t.Fatal("view is missing the picker dialog's bottom border")
 	}
 }
 
