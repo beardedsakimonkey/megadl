@@ -453,6 +453,10 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 			m.picker.move(-visible, visible)
 		case "pgdown":
 			m.picker.move(visible, visible)
+		case "home":
+			m.picker.move(-len(m.picker.rows), visible)
+		case "end":
+			m.picker.move(len(m.picker.rows), visible)
 		case " ":
 			m.picker.toggle(m.picker.cursor)
 		case "A":
