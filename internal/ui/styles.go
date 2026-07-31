@@ -306,6 +306,53 @@ func humanRate(bps float64) string {
 	return humanBytes(int64(bps)) + "/s"
 }
 
+// etaW is the widest string etaText returns, so the estimate can hold a column
+// of its own without the fields beside it shifting as it counts down.
+const etaW = len("~99d23h")
+
+// etaText projects how much longer remaining bytes take at rate. The tilde says
+// it is an estimate; it drops off ">99d", which is one already. Empty when there
+// is nothing to project — nothing left to fetch, or nothing moving — so a held or
+// stalled transfer quotes no finish time rather than one that has stopped being
+// true.
+//
+// Each unit is dropped once the one above it carries the answer: seconds stop
+// being quoted past ten minutes, minutes past a day. The estimate is only ever
+// as good as the last half minute of transfer, so a digit that would tick every
+// second is noise rather than precision.
+func etaText(remaining int64, rate float64) string {
+	if remaining <= 0 || rate <= 0 {
+		return ""
+	}
+	secs := float64(remaining) / rate
+	if secs >= 100*24*3600 {
+		return ">99d"
+	}
+	n := int64(secs + 0.5)
+	switch {
+	case n < 60:
+		return fmt.Sprintf("~%ds", n)
+	case n < 10*60:
+		return fmt.Sprintf("~%dm%02ds", n/60, n%60)
+	case n < 3600:
+		return fmt.Sprintf("~%dm", n/60)
+	case n < 24*3600:
+		return fmt.Sprintf("~%dh%02dm", n/3600, n/60%60)
+	}
+	return fmt.Sprintf("~%dd%02dh", n/(24*3600), n/3600%24)
+}
+
+// etaStyled dims the tilde and leaves the duration itself in the terminal's own
+// text color: how long the file has left is worth reading, while the mark that
+// says it is an estimate is only a qualifier on it.
+func etaStyled(text string) string {
+	before, after, found := strings.Cut(text, "~")
+	if !found {
+		return text
+	}
+	return before + styleDim.Render("~") + after
+}
+
 // percentText renders frac as a fixed-width percentage. It rounds down, the
 // way the bars fill cells, so a bar with an empty cell left never sits beside
 // "100%": the pair only reads complete when the transfer actually is.

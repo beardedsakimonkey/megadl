@@ -402,13 +402,16 @@ func (a *App) statusbarView() string {
 	}
 	f := head.file
 	// No bytes are moving, so the rate column stays blank and the partial on
-	// disk says how far the file has already got.
+	// disk says how far the file has already got. The estimate keeps the speed
+	// the last run was managing, so a held queue still says what the file it is
+	// holding has left to do once it picks back up.
 	next := engine.Snapshot{
 		ActiveID:    head.dl.ID,
 		CurrentFile: filepath.Base(f.LocalPath),
 		CurrentPath: f.LocalPath,
 		FileSize:    f.Size,
 		FileDone:    head.partial,
+		AvgRate:     snap.AvgRate,
 		Paused:      snap.Paused,
 	}
 	// the file's own marker, so the strip and its row in the file pane agree:
@@ -429,7 +432,9 @@ func (a *App) statusbarView() string {
 const statusbarBytesW = len("1024.0 / 1024.0 MiB")
 
 // statusbarLine renders the strip above the footer for a file transfer:
-// marker, name, progress bar, percent, bytes, and rate. The marker arrives
+// marker, name, progress bar, percent, bytes, estimate, and rate. It stays one
+// line: the file being fetched is what the strip is for, and the queue behind
+// it is what the library pane already shows. The marker arrives
 // already styled, and offset says how far along the bar the sweep's bands have
 // travelled. Empty when there is no transfer to draw.
 func statusbarLine(snap engine.Snapshot, marker string, width int, offset float64) string {
@@ -442,6 +447,9 @@ func statusbarLine(snap engine.Snapshot, marker string, width int, offset float6
 	}
 	percent := percentText(frac)
 	bytes := fmt.Sprintf("%*s", statusbarBytesW, bytesPair(snap.FileDone, snap.FileSize))
+	// The estimate is projected from the smoothed rate, so it counts down
+	// instead of jumping about with the speed the column beside it reports.
+	eta := fmt.Sprintf("%*s", etaW, etaText(snap.FileSize-snap.FileDone, snap.AvgRate))
 	// A zero rate keeps its (blank) column so the line doesn't reflow when the
 	// transfer stalls or has just started. A paused queue uses that same
 	// column for its state, keeping every field to its left in place.
@@ -455,26 +463,31 @@ func statusbarLine(snap engine.Snapshot, marker string, width int, offset float6
 		rateStyled = rateStyle(snap.Rate).Render(rate)
 	}
 
-	// " ⠋ name  ███▌░░ 42%  12.4 / 30.0 MiB  3.4 MiB/s ", with the ░ cells
-	// drawn as blocks in the track color. Every field after the bar has a
+	// " ⠋ name  ███▌░░ 42%  12.4 / 30.0 MiB  ~2m14s  3.4 MiB/s ", with the ░
+	// cells drawn as blocks in the track color. Every field after the bar has a
 	// constant width so the bar never shifts as the numbers tick. In narrow
-	// terminals the byte counts give way to the name, then the rate, then
-	// the bar shrinks.
+	// terminals they give way to the name in turn — byte counts first, then the
+	// estimate, then the rate — and only then does the bar shrink.
 	const minNameW = 12
 	barW := 20
-	stats := bytes + "  " + rate
+	stats := []struct {
+		text  string // styled, so it is never measured
+		width int
+	}{
+		{styleDim.Render(bytes), statusbarBytesW},
+		{etaStyled(eta), etaW},
+		{rateStyled, rateW},
+	}
+	drop := 0 // fields given up, from the widest end
 	nameW := func() int {
 		w := width - 3 - 2 - barW - 1 - len(percent) - 1
-		if stats != "" {
-			w -= 2 + lipgloss.Width(stats)
+		for _, f := range stats[drop:] {
+			w -= 2 + f.width
 		}
 		return w
 	}
-	if nameW() < minNameW {
-		stats = rate
-	}
-	if nameW() < minNameW {
-		stats = ""
+	for drop < len(stats) && nameW() < minNameW {
+		drop++
 	}
 	if nameW() < minNameW {
 		barW = max(6, barW-(minNameW-nameW()))
@@ -486,12 +499,8 @@ func statusbarLine(snap engine.Snapshot, marker string, width int, offset float6
 	bar := shineProgressBar(barW, frac, offset, snap.Paused)
 	left := " " + marker + " " + truncate(snap.CurrentFile, nameW())
 	tail := bar + " " + styleTitle.Render(percent)
-	switch stats {
-	case "":
-	case rate:
-		tail += "  " + rateStyled
-	default:
-		tail += "  " + styleDim.Render(bytes) + "  " + rateStyled
+	for _, f := range stats[drop:] {
+		tail += "  " + f.text
 	}
 	gap := max(2, width-lipgloss.Width(left)-lipgloss.Width(tail)-1)
 	return left + strings.Repeat(" ", gap) + tail + " "

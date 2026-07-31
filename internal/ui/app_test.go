@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -340,6 +341,71 @@ func TestStatusbarMarksHeldQueueHead(t *testing.T) {
 	}
 }
 
+// pacedProc reports a couple of chunks landing and then goes quiet, the way a
+// transfer held mid-file does. Unlike startedProc it exits on the way out —
+// the engine only lets go of a download that says it ended — and the buffer
+// leaves room for that event, since Stop is called with the engine's lock held
+// and a send that blocked would be a send consume could never drain.
+type pacedProc struct {
+	events chan mega.Event
+	once   sync.Once
+}
+
+func (p *pacedProc) Events() <-chan mega.Event { return p.events }
+
+func (p *pacedProc) Stop() {
+	p.once.Do(func() {
+		p.events <- mega.ExitEvent{}
+		close(p.events)
+	})
+}
+
+type pacedDriver struct{ path string }
+
+func (d pacedDriver) List(context.Context, string) ([]mega.Node, error) { return nil, nil }
+
+func (d pacedDriver) Start(context.Context, mega.DownloadArgs) (mega.Proc, error) {
+	p := &pacedProc{events: make(chan mega.Event, 8)}
+	p.events <- mega.FileStartEvent{Path: d.path, Size: 100}
+	p.events <- mega.ProgressEvent{Done: -1, Total: 60}
+	p.events <- mega.ProgressEvent{Done: 20, Total: 60}
+	p.events <- mega.ProgressEvent{Done: 40, Total: 60}
+	return p, nil
+}
+
+// Holding the queue cancels the transfer, but the file it stopped on has just
+// as much left to fetch as it did a moment before, so the strip keeps saying
+// how long that will take — at the speed the run was managing when it stopped.
+func TestStatusbarKeepsTheEstimateWhileHeld(t *testing.T) {
+	app, database, files := queueBarApp(t, 40)
+	app.eng = engine.New(pacedDriver{path: files[0].LocalPath}, database)
+	go app.eng.Run(t.Context())
+	app.eng.Kick()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for app.eng.Snapshot().AvgRate == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for a rate to be measured")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	app.eng.SetPaused(true)
+	for app.eng.Snapshot().ActiveID != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("pause never cancelled the download in flight")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	got := ansi.Strip(app.statusbarView())
+	if !strings.Contains(got, "PAUSED") {
+		t.Fatalf("statusbar = %q, want the held strip", got)
+	}
+	if !strings.Contains(got, "~") {
+		t.Fatalf("statusbar = %q, want the estimate kept while held", got)
+	}
+}
+
 func TestPausedNoticeShownWithoutStatusbarFile(t *testing.T) {
 	app, database, files := queueBarApp(t, 0)
 	if err := database.SetDownloadQueued(files[0].DownloadID, false); err != nil {
@@ -430,6 +496,85 @@ func TestStatusbarNarrowDropsByteCounts(t *testing.T) {
 	}
 	if w := lipgloss.Width(got); w > 48 {
 		t.Fatalf("statusbar width = %d, want <= 48", w)
+	}
+}
+
+// An estimate is only as good as the last half minute of transfer, so it drops
+// the digits that would tick without meaning anything.
+func TestEtaTextDropsUnitsAsTheEstimateGrows(t *testing.T) {
+	for _, tc := range []struct {
+		left int64
+		rate float64
+		want string
+	}{
+		{0, 1 << 20, ""}, // nothing left to fetch
+		{1 << 30, 0, ""}, // nothing moving to project from
+		{100, 2, "~50s"}, // seconds while there are only seconds
+		{45 << 20, 1 << 20, "~45s"},
+		{90, 1, "~1m30s"},    // ...and while the minutes are few
+		{45 * 60, 1, "~45m"}, // past ten minutes the seconds are noise
+		{8 << 30, 3 << 20, "~45m"},
+		{2*3600 + 5*60, 1, "~2h05m"},
+		{10 * 24 * 3600, 1, "~10d00h"},
+		{1 << 40, 1 << 10, ">99d"}, // past projecting usefully
+	} {
+		got := etaText(tc.left, tc.rate)
+		if got != tc.want {
+			t.Errorf("etaText(%d, %v) = %q, want %q", tc.left, tc.rate, got, tc.want)
+		}
+		if len(got) > etaW {
+			t.Errorf("etaText(%d, %v) = %q, wider than its %d-cell column",
+				tc.left, tc.rate, got, etaW)
+		}
+	}
+}
+
+func TestStatusbarProjectsTheCurrentFilesFinish(t *testing.T) {
+	snap := engine.Snapshot{
+		ActiveID:    3,
+		CurrentFile: "episode-01.mkv",
+		FileSize:    100,
+		FileDone:    25,
+		Rate:        2 << 20,
+		AvgRate:     1, // 75 bytes left at a byte a second
+	}
+
+	if got := ansi.Strip(statusbarLine(snap, "⠋", 100, 0)); !strings.Contains(got, "~1m15s") {
+		t.Fatalf("statusbar = %q, want the file's estimate", got)
+	}
+
+	// Nothing is moving, so there is nothing to project: an estimate frozen
+	// where the bytes stopped would keep promising a finish that isn't coming.
+	snap.Rate, snap.AvgRate = 0, 0
+	if got := ansi.Strip(statusbarLine(snap, "⠋", 100, 0)); strings.Contains(got, "~") {
+		t.Fatalf("statusbar = %q, want no estimate for a stalled transfer", got)
+	}
+}
+
+// The fields right of the bar give way widest-first, so the narrower the
+// terminal the more of the line is the file's name.
+func TestStatusbarNarrowDropsTheEstimateBeforeTheRate(t *testing.T) {
+	snap := engine.Snapshot{
+		ActiveID:    3,
+		CurrentFile: "a-very-long-file-name.mkv",
+		FileSize:    100,
+		FileDone:    50,
+		Rate:        1 << 20,
+		AvgRate:     1,
+	}
+
+	got := ansi.Strip(statusbarLine(snap, "⠋", 80, 0))
+	if strings.Contains(got, " / ") || !strings.Contains(got, "~50s") ||
+		!strings.Contains(got, "MiB/s") {
+		t.Fatalf("statusbar at 80 = %q, want the estimate and rate without byte counts", got)
+	}
+
+	got = ansi.Strip(statusbarLine(snap, "⠋", 60, 0))
+	if strings.Contains(got, "~") || !strings.Contains(got, "MiB/s") {
+		t.Fatalf("statusbar at 60 = %q, want the rate alone", got)
+	}
+	if w := lipgloss.Width(got); w > 60 {
+		t.Fatalf("statusbar width = %d, want <= 60", w)
 	}
 }
 

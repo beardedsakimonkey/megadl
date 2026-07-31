@@ -826,3 +826,129 @@ func TestEngineErrorStatus(t *testing.T) {
 		t.Errorf("driver started %d times, want 1 — the failed run was retried", len(started))
 	}
 }
+
+// The rate column and the finish estimates read the same bytes over different
+// windows, so a lull that drops the reported speed to nothing still leaves the
+// estimates something to project from.
+func TestRateMetersDifferInHowFarBackTheyLook(t *testing.T) {
+	stale := rateSample{t: time.Now().Add(-20 * time.Second), n: 1 << 20}
+	now, avg := rateMeter{window: rateWindow}, rateMeter{window: avgWindow}
+	now.samples = append(now.samples, stale)
+	avg.samples = append(avg.samples, stale)
+
+	now.add(1 << 20)
+	avg.add(1 << 20)
+
+	if len(now.samples) != 1 {
+		t.Errorf("rate meter kept %d samples, want the 20s-old one dropped", len(now.samples))
+	}
+	if len(avg.samples) != 2 {
+		t.Errorf("avg meter kept %d samples, want the 20s-old one held", len(avg.samples))
+	}
+	// One sample is a single instant, which is no rate at all; the pair spans
+	// 20 seconds of transfer.
+	if got := now.rate(); got != 0 {
+		t.Errorf("rate over one sample = %v, want 0", got)
+	}
+	if got := avg.rate(); got < 90<<10 || got > 110<<10 {
+		t.Errorf("avg rate = %v, want ~100 KiB/s (2 MiB over 20s)", got)
+	}
+}
+
+// Estimates are projected from AvgRate, so it has to be reported alongside the
+// speed the rate column shows rather than only after the transfer ends.
+func TestSnapshotReportsBothRatesWhileBytesLand(t *testing.T) {
+	release := make(chan struct{})
+	drv := newFakeDriver(driverRun{
+		events: []mega.Event{
+			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+			mega.ProgressEvent{Done: -1, Total: 100},
+			mega.ProgressEvent{Done: 20, Total: 100},
+			mega.ProgressEvent{Done: 60, Total: 100},
+			mega.FileDoneEvent{Path: "/fake/a.mkv"},
+			mega.EndEvent{Status: 0},
+		},
+		waitAfter: 4,
+		release:   release,
+	})
+
+	d := testDB(t)
+	id := insertDownload(t, d)
+
+	eng := New(drv, d)
+	go eng.Run(t.Context())
+	eng.Kick()
+	waitActive(t, eng, id)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		snap := eng.Snapshot()
+		if snap.Rate > 0 && snap.AvgRate > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("snapshot = %+v, want both rates reported", snap)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	waitStatus(t, d, id, db.StatusDone)
+}
+
+// Pausing cancels the transfer the estimates were being measured from, so the
+// speed it had reached has to outlive it: a held queue is holding a file
+// part-way through, and how long that file has left is the thing the strip is
+// holding it in front of.
+func TestPauseKeepsTheRateItsEstimatesComeFrom(t *testing.T) {
+	drv := newFakeDriver(driverRun{
+		events: []mega.Event{
+			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+			mega.ProgressEvent{Done: -1, Total: 100},
+			mega.ProgressEvent{Done: 20, Total: 100},
+			mega.ProgressEvent{Done: 60, Total: 100},
+		},
+		waitForStop: true,
+	})
+
+	d := testDB(t)
+	id := insertDownload(t, d)
+
+	eng := New(drv, d)
+	go eng.Run(t.Context())
+	eng.Kick()
+	waitActive(t, eng, id)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for eng.Snapshot().AvgRate == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for a rate to be measured")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	eng.SetPaused(true)
+	for eng.ActiveID() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("pause never cancelled the download in flight")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	snap := eng.Snapshot()
+	if snap.AvgRate <= 0 {
+		t.Errorf("snapshot = %+v, want the rate the run reached kept for the estimate", snap)
+	}
+	// The live column is a different question — nothing is moving — and it says
+	// so by staying blank while the pause holds.
+	if snap.Rate != 0 {
+		t.Errorf("rate = %v, want nothing reported as moving while held", snap.Rate)
+	}
+}
+
+// Nothing has been measured before the first transfer, so there is no speed to
+// project from and the estimate says nothing rather than making one up.
+func TestSnapshotHasNoRateBeforeAnythingRuns(t *testing.T) {
+	eng := New(newFakeDriver(), testDB(t))
+	if snap := eng.Snapshot(); snap.AvgRate != 0 {
+		t.Errorf("snapshot = %+v, want no rate before a transfer has measured one", snap)
+	}
+}

@@ -15,15 +15,31 @@ import (
 
 const flushInterval = 5 * time.Second
 
+// The two rate meters read the same bytes over different windows because they
+// answer different questions. The short one is the speed the transfer is
+// running at right now, which is what the rate column reports. The long one is
+// what finish times are projected from: a number that swings with every slow
+// second would drag the estimates around with it.
+const (
+	rateWindow = 5 * time.Second
+	avgWindow  = 30 * time.Second
+)
+
 // Snapshot is the UI's view of the active download.
 type Snapshot struct {
-	ActiveID     int64
-	CurrentFile  string // base name of the file being fetched
-	CurrentPath  string // exact local path of the file being fetched
-	FileSize     int64
-	FileDone     int64 // bytes of the current file present locally
-	OverallDone  int64 // completed files + current file, this download
-	Rate         float64
+	ActiveID    int64
+	CurrentFile string // base name of the file being fetched
+	CurrentPath string // exact local path of the file being fetched
+	FileSize    int64
+	FileDone    int64 // bytes of the current file present locally
+	OverallDone int64 // completed files + current file, this download
+	Rate        float64
+	// AvgRate is the same speed measured over a longer window, for projecting
+	// how much longer things take. With nothing running it is the speed the
+	// last run was managing when it stopped, so a held queue still projects a
+	// finish for the file it is holding — from a rate that was, rather than one
+	// that is. It is zero until a transfer has actually measured one.
+	AvgRate      float64
 	QuotaStalled bool
 	StderrTail   []string
 
@@ -56,7 +72,8 @@ type active struct {
 	gotEnd       bool
 	stderrTail   []string
 
-	rate rateMeter
+	rate rateMeter // what the transfer is doing now
+	avg  rateMeter // ...smoothed, for projecting finish times
 }
 
 // restarting is what a download keeps of itself between the process a changed
@@ -84,6 +101,12 @@ type Engine struct {
 	kick        chan struct{}
 	paused      bool // mirrors queue_state, which is the durable copy
 	pauseReason string
+	// lastAvg is the smoothed rate the last run was managing when it ended,
+	// kept so a held queue can still say how long the file it stopped on has
+	// left. It is a rate that was, not one that is: the longer the queue sits,
+	// the more the estimate it feeds is a guess about the connection the next
+	// run will get. Only in memory, so a restart starts over with no guess.
+	lastAvg float64
 }
 
 func New(drv mega.Driver, database *db.DB) *Engine {
@@ -190,6 +213,8 @@ func (e *Engine) maybeStart(ctx context.Context) {
 		sizes:   map[string]int64{},
 		doneSet: map[string]bool{},
 		handles: map[string]bool{},
+		rate:    rateMeter{window: rateWindow},
+		avg:     rateMeter{window: avgWindow},
 	}
 	for _, f := range files {
 		a.sizes[f.LocalPath] = f.Size
@@ -247,6 +272,7 @@ func (e *Engine) consume(a *active) {
 				if delta := ev.Done - a.sessionDone; delta > 0 {
 					e.pending += delta
 					a.rate.add(delta)
+					a.avg.add(delta)
 					// Bytes are landing again, so the stall is over: the
 					// banner — and the pause finish would impose — describe a
 					// throttle that is current, not one a retry already got past.
@@ -354,6 +380,13 @@ func (e *Engine) finishLocked(a *active, exitErr error) {
 		// changed. Hold on to what it was fetching so the Kick below can hand
 		// the spinner straight over to the replacement process.
 		e.restart = &restarting{id: a.id, file: a.currentFile, path: a.currentPath}
+	}
+
+	// Hold on to the speed this run reached before its meter goes with it: the
+	// rate decays with the clock once bytes stop landing, so it has to be read
+	// here rather than whenever the strip next asks for it.
+	if r := a.avg.rate(); r > 0 {
+		e.lastAvg = r
 	}
 
 	e.act = nil
@@ -560,7 +593,10 @@ func (e *Engine) Snapshot() Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.act == nil {
-		s := Snapshot{Paused: e.paused, PauseReason: e.pauseReason}
+		// Nothing is moving, but the last run's speed is still the best answer
+		// there is to how long what it stopped on takes, so a held queue keeps
+		// projecting from it rather than falling silent.
+		s := Snapshot{AvgRate: e.lastAvg, Paused: e.paused, PauseReason: e.pauseReason}
 		if e.restart != nil {
 			// No byte counts to report mid-restart; the on-disk partial keeps
 			// the row's progress where it was.
@@ -583,6 +619,7 @@ func (e *Engine) Snapshot() Snapshot {
 		FileDone:     fileDone,
 		OverallDone:  a.completed + fileDone,
 		Rate:         a.rate.rate(),
+		AvgRate:      a.avg.rate(),
 		QuotaStalled: a.quotaStalled,
 		StderrTail:   append([]string(nil), a.stderrTail...),
 		Paused:       e.paused,
@@ -590,8 +627,10 @@ func (e *Engine) Snapshot() Snapshot {
 	}
 }
 
-// rateMeter is a sliding-window byte-rate estimator.
+// rateMeter is a sliding-window byte-rate estimator. window is how far back it
+// looks; the zero value looks back rateWindow.
 type rateMeter struct {
+	window  time.Duration
 	samples []rateSample
 }
 
@@ -600,10 +639,17 @@ type rateSample struct {
 	n int64
 }
 
+func (r *rateMeter) span() time.Duration {
+	if r.window <= 0 {
+		return rateWindow
+	}
+	return r.window
+}
+
 func (r *rateMeter) add(n int64) {
 	now := time.Now()
 	r.samples = append(r.samples, rateSample{now, n})
-	cutoff := now.Add(-5 * time.Second)
+	cutoff := now.Add(-r.span())
 	i := 0
 	for i < len(r.samples) && r.samples[i].t.Before(cutoff) {
 		i++
