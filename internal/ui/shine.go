@@ -43,12 +43,28 @@ const (
 // gradient is the steps between two colors, and the 256-color palette holds
 // almost nothing between the bar's green and a bright one — walking the few
 // entries it does have is exactly the banding the ramp exists to avoid.
-// shineBase is ANSI 42, the color styleProgress fills with, so an unlit cell of
-// a sweeping bar is the same green as a bar at rest.
+//
+// A palette's base is the color of an unlit cell, matched to the terminal color
+// the plain bar fills with so a bar reads the same whether or not the sweep is
+// drawing it, and its peak is what a band's center reaches.
+type shinePalette struct{ base, peak [3]float64 }
+
+// shineRunning is ANSI 42, styleProgress's green; shineHeld is ANSI 214, the
+// orange styleWarn marks a held queue with everywhere else it appears.
 var (
-	shineBase = [3]float64{0, 215, 135}
-	shinePeak = [3]float64{125, 240, 194}
+	shineRunning = shinePalette{base: [3]float64{0, 215, 135}, peak: [3]float64{125, 240, 194}}
+	shineHeld    = shinePalette{base: [3]float64{255, 175, 0}, peak: [3]float64{255, 216, 140}}
 )
+
+// shinePaletteFor picks the colors a bar is drawn in: held queues wear the
+// orange their marker and their file rows already do, so the strip says it is
+// stopped in color as well as in a sweep that has come to rest.
+func shinePaletteFor(paused bool) shinePalette {
+	if paused {
+		return shineHeld
+	}
+	return shineRunning
+}
 
 // sweepRuns reports whether the bands should be travelling: only while a file
 // is actually being fetched. Light is not what reports the transfer — movement
@@ -118,16 +134,17 @@ func shineIntensity(x float64) float64 {
 
 // shineColor is the color the bar takes at position x cells along it, the
 // pattern having travelled offset.
-func shineColor(x, offset float64) lipgloss.Color {
+func shineColor(x, offset float64, pal shinePalette) lipgloss.Color {
 	t := shineIntensity(x + offset)
 	mix := func(i int) int {
-		return int(math.Round(shineBase[i] + (shinePeak[i]-shineBase[i])*t))
+		return int(math.Round(pal.base[i] + (pal.peak[i]-pal.base[i])*t))
 	}
 	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", mix(0), mix(1), mix(2)))
 }
 
 // shineProgressBar draws the statusbar's bar with the sweep running over its
-// filled cells. Geometry is the plain bar's, down to the eighths of the leading
+// filled cells, in green while the transfer runs and in orange while its queue
+// is held. Geometry is the plain bar's, down to the eighths of the leading
 // cell, so the sweep starting or stopping never moves the boundary.
 //
 // Each cell is drawn as a left half block with its own foreground and
@@ -135,27 +152,28 @@ func shineColor(x, offset float64) lipgloss.Color {
 // per cell, and the terminal's cell grid stops being the limit on how smooth it
 // can be. Where the profile has no color to give, that trick would leave visible
 // half blocks, so the plain bar stands in.
-func shineProgressBar(width int, frac float64, offset float64) string {
+func shineProgressBar(width int, frac float64, offset float64, paused bool) string {
 	if width < 2 {
 		return ""
 	}
 	if !colorEnabled() {
-		return progressBar(width, frac)
+		return progressBar(width, frac, paused)
 	}
+	pal := shinePaletteFor(paused)
 	filled, rem := barCells(width, frac)
 	var b strings.Builder
 	for i := range filled {
 		x := float64(i)
 		b.WriteString(lipgloss.NewStyle().
-			Foreground(shineColor(x, offset)).
-			Background(shineColor(x+0.5, offset)).
+			Foreground(shineColor(x, offset, pal)).
+			Background(shineColor(x+0.5, offset, pal)).
 			Render("▌"))
 	}
 	if rem > 0 {
 		// The partial cell owes its background to the track, so this one cell
 		// is lit at whole-cell resolution.
 		b.WriteString(lipgloss.NewStyle().
-			Foreground(shineColor(float64(filled), offset)).
+			Foreground(shineColor(float64(filled), offset, pal)).
 			Background(colorTrack).
 			Render(eighthBlocks[rem-1]))
 		filled++

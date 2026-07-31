@@ -151,6 +151,30 @@ func TestSweepRunsOnlyWhileFetching(t *testing.T) {
 	}
 }
 
+// A held queue's bar is orange and a running one's green, both ramping to a
+// lighter version of themselves at a band's center. The unlit ends are the RGB
+// of the terminal colors the plain bars fill with — ANSI 42 and ANSI 214 — so a
+// bar looks the same whether the sweep or the fallback drew it.
+func TestShinePaletteMatchesTheBarsItStandsIn(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		paused     bool
+		base, peak string
+	}{
+		{"running", false, "#00D787", "#7DF0C2"},
+		{"held", true, "#FFAF00", "#FFD88C"},
+	} {
+		pal := shinePaletteFor(tc.paused)
+		// Half a band along, the light has fallen off entirely.
+		if got := shineColor(shineSpacing/2, 0, pal); string(got) != tc.base {
+			t.Fatalf("%s bar between bands = %v, want the flat %v", tc.name, got, tc.base)
+		}
+		if got := shineColor(0, 0, pal); string(got) != tc.peak {
+			t.Fatalf("%s bar at a band's center = %v, want %v", tc.name, got, tc.peak)
+		}
+	}
+}
+
 // The sweep colors each cell's halves separately, which without color to give
 // them leaves a row of half blocks rather than a bar. Where the profile has
 // none, the plain bar has to be what gets drawn — including here, which is why
@@ -160,13 +184,16 @@ func TestShineProgressBarFallsBackWithoutColor(t *testing.T) {
 		t.Skip("profile emits color, so the sweep draws its own bar")
 	}
 	for _, frac := range []float64{0, 0.01, 0.25, 0.4, 0.625, 0.99, 1} {
-		plain := progressBar(20, frac)
-		if got := shineProgressBar(20, frac, 3.5); got != plain {
-			t.Fatalf("sweeping bar at %v = %q, want the plain bar %q", frac, got, plain)
+		for _, paused := range []bool{false, true} {
+			plain := progressBar(20, frac, paused)
+			if got := shineProgressBar(20, frac, 3.5, paused); got != plain {
+				t.Fatalf("sweeping bar at %v (paused=%v) = %q, want the plain bar %q",
+					frac, paused, got, plain)
+			}
 		}
 	}
 	// A bar too narrow to draw is still too narrow to draw.
-	if got := shineProgressBar(1, 0.5, 0); got != "" {
+	if got := shineProgressBar(1, 0.5, 0, false); got != "" {
 		t.Fatalf("shineProgressBar(1, ...) = %q, want empty", got)
 	}
 }

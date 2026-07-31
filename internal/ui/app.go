@@ -483,7 +483,7 @@ func statusbarLine(snap engine.Snapshot, marker string, width int, offset float6
 		return ""
 	}
 
-	bar := shineProgressBar(barW, frac, offset)
+	bar := shineProgressBar(barW, frac, offset, snap.Paused)
 	left := " " + marker + " " + truncate(snap.CurrentFile, nameW())
 	tail := bar + " " + styleTitle.Render(percent)
 	switch stats {

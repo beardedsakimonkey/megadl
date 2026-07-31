@@ -329,23 +329,27 @@ func barCells(width int, frac float64) (filled, rem int) {
 	return eighths / 8, eighths % 8
 }
 
-// progressBar renders a fixed-width bar for frac in [0,1]. The bar is green
-// whatever the queue is doing — a held one says so with its marker and with a
-// sweep that has stopped, not with a color of its own. The leading cell is
+// progressBar renders a fixed-width bar for frac in [0,1], green while the
+// queue runs and orange while it is held — the same orange the pause marker and
+// the file rows use, so the whole screen agrees at a glance. The leading cell is
 // drawn at eighth-of-a-cell resolution so a transfer that has just started
 // reads as moving rather than sitting empty until it has earned a whole cell.
 //
 // Fill and track are the same glyph in different colors, so the bar is one
 // unbroken strip: the partial cell only has to carry the track as its
 // background for the boundary between them to land mid-cell.
-func progressBar(width int, frac float64) string {
+func progressBar(width int, frac float64, paused bool) string {
 	if width < 2 {
 		return ""
 	}
+	fill := styleProgress
+	if paused {
+		fill = styleWarn
+	}
 	filled, rem := barCells(width, frac)
-	bar := styleProgress.Render(strings.Repeat("█", filled))
+	bar := fill.Render(strings.Repeat("█", filled))
 	if rem > 0 {
-		bar += styleProgress.Background(colorTrack).Render(eighthBlocks[rem-1])
+		bar += fill.Background(colorTrack).Render(eighthBlocks[rem-1])
 		filled++
 	}
 	return bar + styleProgressTrack.Render(strings.Repeat("█", width-filled))

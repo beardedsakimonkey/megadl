@@ -326,14 +326,14 @@ func TestStatusbarMarksHeldQueueHead(t *testing.T) {
 	if !strings.Contains(got, styleWarn.Render(pausedRate)) {
 		t.Fatalf("statusbar = %q, want orange state %q", got, styleWarn.Render(pausedRate))
 	}
-	// The bar keeps the green it has while running, lit by bands that have
-	// stopped where they stood rather than by a color of its own.
-	wantBar := shineProgressBar(20, 0.4, 0)
+	// The bar turns the same orange as the marker, lit by bands that have
+	// stopped where they stood rather than blinking out.
+	wantBar := shineProgressBar(20, 0.4, 0, true)
 	if !strings.Contains(got, wantBar) {
-		t.Fatalf("statusbar = %q, want the still sweep's bar %q", got, wantBar)
+		t.Fatalf("statusbar = %q, want the held bar %q", got, wantBar)
 	}
-	if colorEnabled() && strings.Contains(got, styleWarn.Render(strings.Repeat("█", 8))) {
-		t.Fatalf("statusbar = %q, want no orange fill in its bar", got)
+	if colorEnabled() && strings.Contains(got, shineProgressBar(20, 0.4, 0, false)) {
+		t.Fatalf("statusbar = %q, want no green fill in a held bar", got)
 	}
 	if detail := ansi.Strip(app.downloads.detailView(app.width)); strings.Contains(detail, "PAUSED") {
 		t.Fatalf("detail = %q, want no redundant paused notice above the file strip", detail)
