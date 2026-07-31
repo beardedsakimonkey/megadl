@@ -272,6 +272,7 @@ type startedProc struct {
 
 func (p *startedProc) Events() <-chan mega.Event { return p.events }
 func (p *startedProc) Stop()                     { close(p.events) }
+func (p *startedProc) RetryNow()                 {}
 
 type startedDriver struct{ path string }
 
@@ -352,6 +353,8 @@ type pacedProc struct {
 }
 
 func (p *pacedProc) Events() <-chan mega.Event { return p.events }
+
+func (p *pacedProc) RetryNow() {}
 
 func (p *pacedProc) Stop() {
 	p.once.Do(func() {
@@ -525,6 +528,30 @@ func TestEtaTextDropsUnitsAsTheEstimateGrows(t *testing.T) {
 		if len(got) > etaW {
 			t.Errorf("etaText(%d, %v) = %q, wider than its %d-cell column",
 				tc.left, tc.rate, got, etaW)
+		}
+	}
+}
+
+// A countdown is a number the app knows rather than one it projects, so unlike
+// the estimate it keeps its seconds all the way up: they are what is visibly
+// ticking.
+func TestCountdownTextKeepsItsSeconds(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{-time.Second, "0s"}, // a wait that has run out
+		{14 * time.Second, "14s"},
+		{13500 * time.Millisecond, "14s"}, // the part-second is still to wait
+		{59500 * time.Millisecond, "1m 00s"},
+		{3599500 * time.Millisecond, "1h 00m"},
+		{3*time.Minute + 42*time.Second, "3m 42s"},
+		{59 * time.Minute, "59m 00s"},
+		{time.Hour + 9*time.Minute, "1h 09m"},
+	} {
+		if got := countdownText(tc.d); got != tc.want {
+			t.Errorf("countdownText(%s) = %q, want %q", tc.d, got, tc.want)
 		}
 	}
 }

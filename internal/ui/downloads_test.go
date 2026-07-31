@@ -1479,7 +1479,7 @@ func (stalledDriver) Start(context.Context, mega.DownloadArgs) (mega.Proc, error
 	p := &stalledProc{events: make(chan mega.Event, 4), stop: make(chan struct{})}
 	go func() {
 		p.events <- mega.FileStartEvent{Path: "/dl/Folder/a", Remote: "/Folder/a", Size: 100}
-		p.events <- mega.QuotaEvent{Line: "Server returned 509 (over quota)"}
+		p.events <- quotaRetry()
 		<-p.stop
 		p.events <- mega.ExitEvent{}
 		close(p.events)
@@ -1495,6 +1495,7 @@ type stalledProc struct {
 
 func (p *stalledProc) Events() <-chan mega.Event { return p.events }
 func (p *stalledProc) Stop()                     { p.stopOnce.Do(func() { close(p.stop) }) }
+func (p *stalledProc) RetryNow()                 {}
 
 func TestEscDismissesQuotaBanner(t *testing.T) {
 	app, database, id := toggleTestApp(t)
@@ -1514,18 +1515,30 @@ func TestEscDismissesQuotaBanner(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	m.reload()
-	if !strings.Contains(m.detailView(80), "QUOTA") {
+	if !strings.Contains(m.detailView(80), "quota exceeded") {
 		t.Fatal("detail strip should show the quota banner while stalled")
 	}
 
 	m.update(tea.KeyMsg{Type: tea.KeyEsc})
-	if strings.Contains(m.detailView(80), "QUOTA") {
+	if strings.Contains(m.detailView(80), "quota exceeded") {
 		t.Fatal("esc did not dismiss the quota banner")
 	}
 	// still hidden on later frames, since the engine keeps reporting the stall
 	pressKey(m, "j")
-	if strings.Contains(m.detailView(80), "QUOTA") {
+	if strings.Contains(m.detailView(80), "quota exceeded") {
 		t.Fatal("quota banner came back after being dismissed")
+	}
+}
+
+// quotaRetry is the event a 509 produces: a backoff whose wait is long enough
+// to still be counting down while the test looks at the strip it draws.
+func quotaRetry() mega.RetryEvent {
+	return mega.RetryEvent{
+		Reason:  "transfer quota exceeded",
+		Detail:  "Server returned 509 (over quota)",
+		Status:  509,
+		Attempt: 1,
+		Delay:   time.Minute,
 	}
 }
 
@@ -1542,9 +1555,24 @@ func (d pushDriver) Start(context.Context, mega.DownloadArgs) (mega.Proc, error)
 type pushProc struct {
 	events   chan mega.Event
 	stopOnce sync.Once
+
+	mu      sync.Mutex
+	retries int
 }
 
 func (p *pushProc) Events() <-chan mega.Event { return p.events }
+
+func (p *pushProc) RetryNow() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.retries++
+}
+
+func (p *pushProc) retryCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.retries
+}
 
 // Stop exits from a goroutine: the engine calls it holding its lock, which the
 // event pump needs before it can take the exit off the channel.
@@ -1583,7 +1611,7 @@ func TestQuotaBannerClearsWhenBytesResume(t *testing.T) {
 
 	m := &app.downloads
 	proc.events <- mega.FileStartEvent{Path: "/dl/Folder/a", Remote: "/Folder/a", Size: 100}
-	proc.events <- mega.QuotaEvent{Line: "Server returned 509 (over quota)"}
+	proc.events <- quotaRetry()
 	waitStall(t, app.eng, true)
 	m.update(tea.KeyMsg{Type: tea.KeyEsc})
 
@@ -1591,14 +1619,72 @@ func TestQuotaBannerClearsWhenBytesResume(t *testing.T) {
 	proc.events <- mega.ProgressEvent{Done: 40, Total: 100}
 	waitStall(t, app.eng, false)
 	m.reload()
-	if strings.Contains(m.detailView(80), "QUOTA") {
+	if strings.Contains(m.detailView(80), "quota exceeded") {
 		t.Fatal("banner is still up after the download resumed")
 	}
 
-	proc.events <- mega.QuotaEvent{Line: "Server returned 509 (over quota)"}
+	proc.events <- quotaRetry()
 	waitStall(t, app.eng, true)
-	if !strings.Contains(m.detailView(80), "QUOTA") {
+	if !strings.Contains(m.detailView(80), "quota exceeded") {
 		t.Fatal("a fresh stall stayed hidden behind the earlier dismissal")
+	}
+}
+
+// The retry strip has to say all four things at once: what went wrong, how
+// long is left of the wait, which attempt is coming, and the key that skips it.
+func TestRetryLineDescribesTheWait(t *testing.T) {
+	snap := engine.Snapshot{Retry: engine.RetryWait{
+		Reason:  "server busy",
+		Attempt: 3,
+		Until:   time.Now().Add(14 * time.Second),
+	}}
+	got := retryLine(snap)
+	for _, want := range []string{"server busy", "retrying in 14s", "attempt 3", "retry now"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("retry line %q is missing %q", got, want)
+		}
+	}
+
+	// A first attempt has no number worth quoting: "attempt 1" only adds a
+	// word to a line that already says a retry is coming.
+	snap.Retry.Attempt = 1
+	if got := retryLine(snap); strings.Contains(got, "attempt") {
+		t.Errorf("retry line %q counts an attempt nobody needs", got)
+	}
+
+	// The wait is out but the attempt has not reported anything yet.
+	snap.Retry.Until = time.Now().Add(-time.Second)
+	if got := retryLine(snap); !strings.Contains(got, "retrying now") {
+		t.Errorf("retry line %q, want it to say the attempt is due", got)
+	}
+
+	if got := retryLine(engine.Snapshot{}); got != "" {
+		t.Errorf("retry line with nothing retrying = %q, want empty", got)
+	}
+}
+
+// The key has to reach the driver rather than only tidying the display, and
+// take the countdown with it: nothing announces the attempt that follows.
+func TestRetryKeySkipsTheWait(t *testing.T) {
+	app, database, id := toggleTestApp(t)
+	proc := &pushProc{events: make(chan mega.Event, 8)}
+	app.eng = engine.New(pushDriver{proc}, database)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go app.eng.Run(ctx)
+	app.eng.Kick()
+	t.Cleanup(func() { app.eng.Dequeue(id) })
+
+	proc.events <- mega.FileStartEvent{Path: "/dl/Folder/a", Remote: "/Folder/a", Size: 100}
+	proc.events <- quotaRetry()
+	waitStall(t, app.eng, true)
+
+	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(retryKey)})
+	if got := proc.retryCount(); got != 1 {
+		t.Fatalf("driver retry nudges = %d, want 1", got)
+	}
+	if app.eng.Snapshot().Retry.Waiting() {
+		t.Error("countdown outlived the key that skipped it")
 	}
 }
 

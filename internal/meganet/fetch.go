@@ -20,26 +20,63 @@ const (
 	idleTimeout      = 2 * time.Minute
 )
 
+// session is the plumbing one download shares with the file loop inside it:
+// where events go, and how the UI cuts a retry wait short.
+type session struct {
+	events chan<- mega.Event
+	// nudge carries "retry now" from the UI. It is buffered so the driver
+	// never has to be listening for one to accept it; waitRetry is what makes
+	// sure the one it acts on belongs to the wait it is in.
+	nudge chan struct{}
+}
+
+// waitRetry announces a failed chunk and holds for the backoff before the next
+// attempt, returning false if the download was cancelled meanwhile. A nudge
+// from the UI ends the wait early; the escalating backoff behind it is left
+// alone, so a user who keeps skipping waits doesn't reset how far it climbed.
+//
+// The stale nudge is dropped before the event goes out, not after: the event
+// is what tells the UI there is a wait to skip, so anything arriving after it
+// is a nudge at this wait and has to count, however quickly it lands.
+func (s session) waitRetry(ctx context.Context, ev mega.RetryEvent) bool {
+	select {
+	case <-s.nudge:
+	default:
+	}
+	s.events <- ev
+
+	timer := time.NewTimer(ev.Delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-s.nudge:
+		return true
+	case <-timer.C:
+		return true
+	}
+}
+
 // syncFile downloads one file and emits lifecycle events around it.
 // Existing files are skipped.
-func (d *Driver) syncFile(ctx context.Context, events chan<- mega.Event, job fileJob) bool {
+func (d *Driver) syncFile(ctx context.Context, s session, job fileJob) bool {
 	if _, err := os.Lstat(job.localPath); err == nil {
-		events <- mega.FileSkipEvent{Path: job.localPath}
+		s.events <- mega.FileSkipEvent{Path: job.localPath}
 		return true
 	}
 	if err := os.MkdirAll(filepath.Dir(job.localPath), 0o755); err != nil {
-		events <- mega.FileErrorEvent{Path: job.localPath, Message: err.Error()}
+		s.events <- mega.FileErrorEvent{Path: job.localPath, Message: err.Error()}
 		return false
 	}
-	events <- mega.FileStartEvent{Path: job.localPath, Remote: job.remotePath, Size: job.size}
-	if err := d.fetchFile(ctx, events, job); err != nil {
+	s.events <- mega.FileStartEvent{Path: job.localPath, Remote: job.remotePath, Size: job.size}
+	if err := d.fetchFile(ctx, s, job); err != nil {
 		if ctx.Err() != nil {
 			return false // cancelled mid-file; no error event, stays resumable
 		}
-		events <- mega.FileErrorEvent{Path: job.localPath, Message: err.Error()}
+		s.events <- mega.FileErrorEvent{Path: job.localPath, Message: err.Error()}
 		return false
 	}
-	events <- mega.FileDoneEvent{Path: job.localPath}
+	s.events <- mega.FileDoneEvent{Path: job.localPath}
 	return true
 }
 
@@ -61,10 +98,36 @@ func (e httpStatusErr) Error() string {
 	return fmt.Sprintf("Server returned %d", int(e))
 }
 
+// errStalled is the watchdog firing: the connection is up but nothing is
+// coming down it. It is a value rather than a formatted error so the retry
+// classification can recognize it.
+var errStalled = fmt.Errorf("no data received for %s", idleTimeout)
+
+// retryReason describes a chunk failure in the few words the UI shows while it
+// counts the wait down, along with the HTTP status behind it (0 when the
+// failure wasn't one). Anything the server didn't put a status on reads as a
+// connection problem, which is what it is from this side.
+func retryReason(err error) (string, int) {
+	var hs httpStatusErr
+	if errors.As(err, &hs) {
+		switch int(hs) {
+		case 509:
+			return "transfer quota exceeded", int(hs)
+		case 500, 502, 503, 504:
+			return "server busy", int(hs)
+		}
+		return fmt.Sprintf("server returned %d", int(hs)), int(hs)
+	}
+	if errors.Is(err, errStalled) {
+		return "no data from server", 0
+	}
+	return "connection failed", 0
+}
+
 // fetchFile downloads into .megatmp.<handle> next to the target,
 // resuming any previous partial data, verifies the meta-MAC and renames
 // the finished file into place.
-func (d *Driver) fetchFile(ctx context.Context, events chan<- mega.Event, job fileJob) error {
+func (d *Driver) fetchFile(ctx context.Context, s session, job fileJob) error {
 	url, size, err := job.getURL(ctx)
 	if err != nil {
 		return err
@@ -103,8 +166,8 @@ func (d *Driver) fetchFile(ctx context.Context, events chan<- mega.Event, job fi
 	}
 
 	sessionStart := pos
-	events <- mega.ProgressEvent{Done: -1, Total: size - pos}
-	prog := progressReporter{events: events, sessionStart: sessionStart, sessionTotal: size - sessionStart}
+	s.events <- mega.ProgressEvent{Done: -1, Total: size - pos}
+	prog := progressReporter{events: s.events, sessionStart: sessionStart, sessionTotal: size - sessionStart}
 
 	deadline := time.Now().Add(retryWindow)
 	tries := 0
@@ -131,20 +194,16 @@ func (d *Driver) fetchFile(ctx context.Context, events chan<- mega.Event, job fi
 		if tries < 8 {
 			tries++
 		}
-		msg := fmt.Sprintf("WARNING: chunk download failed (%s), re-trying after %d seconds", err, 1<<tries)
-		var hs httpStatusErr
-		if errors.As(err, &hs) && int(hs) == 509 {
-			events <- mega.QuotaEvent{Line: msg}
-		}
-		events <- mega.StderrEvent{Line: msg}
-		select {
-		case <-ctx.Done():
+		reason, status := retryReason(err)
+		if !s.waitRetry(ctx, mega.RetryEvent{
+			Reason: reason, Detail: err.Error(), Status: status,
+			Attempt: tries, Delay: time.Duration(1<<tries) * d.retryBase(),
+		}) {
 			return ctx.Err()
-		case <-time.After(time.Duration(1<<tries) * d.retryBase()):
 		}
 	}
 
-	events <- mega.ProgressEvent{Done: -2, Total: 0}
+	s.events <- mega.ProgressEvent{Done: -2, Total: 0}
 
 	if got := mac.finish(); got != job.key.metaMAC {
 		f.Close()
@@ -205,7 +264,7 @@ func (d *Driver) fetchRange(ctx context.Context, job fileJob, url string, f *os.
 		}
 		if rerr != nil {
 			if rctx.Err() != nil && ctx.Err() == nil {
-				return fmt.Errorf("no data received for %s", idleTimeout)
+				return errStalled
 			}
 			return rerr
 		}

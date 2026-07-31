@@ -2,6 +2,8 @@
 // queue engine, UI, and native MEGA protocol implementation.
 package mega
 
+import "time"
+
 // Node is one entry in a public link.
 type Node struct {
 	Index  int
@@ -54,11 +56,18 @@ type ErrorEvent struct{ Message string }
 // EndEvent reports the result of a completed download.
 type EndEvent struct{ Status int }
 
-// QuotaEvent reports that MEGA's transfer limit has stalled a download.
-type QuotaEvent struct{ Line string }
-
-// StderrEvent carries a diagnostic line for display in the UI.
-type StderrEvent struct{ Line string }
+// RetryEvent reports a chunk that failed and the wait before the next
+// attempt. It carries what the driver knows in fields rather than a formatted
+// line, so the UI can count the wait down, say why it is waiting, and offer to
+// cut it short. Status is the HTTP status behind the failure, 0 when it wasn't
+// one; 509 is MEGA's transfer limit.
+type RetryEvent struct {
+	Reason  string        // short phrase: "server busy", "transfer quota exceeded"
+	Detail  string        // the underlying error, for the failure message
+	Status  int           // HTTP status behind it, 0 when it wasn't one
+	Attempt int           // 1-based; back to 1 whenever bytes land
+	Delay   time.Duration // until the next attempt
+}
 
 // ExitEvent is the final event when a download terminates.
 type ExitEvent struct{ Err error }
@@ -71,6 +80,5 @@ func (FileErrorEvent) isEvent() {}
 func (WarnEvent) isEvent()      {}
 func (ErrorEvent) isEvent()     {}
 func (EndEvent) isEvent()       {}
-func (QuotaEvent) isEvent()     {}
-func (StderrEvent) isEvent()    {}
+func (RetryEvent) isEvent()     {}
 func (ExitEvent) isEvent()      {}

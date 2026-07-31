@@ -266,23 +266,123 @@ func TestSkipExisting(t *testing.T) {
 	}
 }
 
-func TestQuota509EmitsQuotaEventAndRetries(t *testing.T) {
+// A 509 has to arrive as a retry the UI can describe and count down — the
+// status, the attempt, and the exact wait — rather than as a line of text.
+func TestQuota509EmitsRetryEventAndRetries(t *testing.T) {
 	m, _, readme := standardTree(t)
 	m.quota509Left = 1
 	dest := filepath.Join(t.TempDir(), "quota")
 
-	evs := run(t, m.driver(), mega.DownloadArgs{
+	drv := m.driver()
+	evs := run(t, drv, mega.DownloadArgs{
 		URL: m.folderURL(), Path: dest, SelectHandles: []string{"FILEHND2"},
 	})
 	if s := endStatus(t, evs); s != 0 {
 		t.Fatalf("end status %d; events %#v", s, evs)
 	}
-	quotas := eventsOf[mega.QuotaEvent](evs)
-	if len(quotas) != 1 || !strings.Contains(quotas[0].Line, "509") {
-		t.Fatalf("quota events = %+v", quotas)
+	retries := eventsOf[mega.RetryEvent](evs)
+	if len(retries) != 1 {
+		t.Fatalf("retry events = %+v", retries)
+	}
+	r := retries[0]
+	if r.Status != 509 || r.Reason != "transfer quota exceeded" {
+		t.Errorf("retry = %q / status %d, want the quota reason and 509", r.Reason, r.Status)
+	}
+	if r.Attempt != 1 || r.Delay != 2*drv.RetryBase {
+		t.Errorf("attempt %d after %s, want attempt 1 after %s", r.Attempt, r.Delay, 2*drv.RetryBase)
+	}
+	if !strings.Contains(r.Detail, "509") {
+		t.Errorf("detail = %q, want the underlying error", r.Detail)
 	}
 	if got := mustRead(t, filepath.Join(dest, "readme.txt")); !bytes.Equal(got, readme) {
 		t.Error("content mismatch after quota retry")
+	}
+}
+
+// The backoff has to be interruptible: once it has climbed into the minutes, a
+// user who can see the throttle has lifted should not have to sit it out. The
+// base here is long enough that only the nudge can end the wait.
+func TestRetryNowEndsTheBackoff(t *testing.T) {
+	m, _, readme := standardTree(t)
+	m.quota509Left = 1
+	dest := filepath.Join(t.TempDir(), "retrynow")
+
+	d := m.driver()
+	d.RetryBase = time.Hour
+
+	p, err := d.Start(context.Background(), mega.DownloadArgs{
+		URL: m.folderURL(), Path: dest, SelectHandles: []string{"FILEHND2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan []mega.Event, 1)
+	go func() {
+		var evs []mega.Event
+		for ev := range p.Events() {
+			evs = append(evs, ev)
+			if _, ok := ev.(mega.RetryEvent); ok {
+				p.RetryNow()
+			}
+		}
+		done <- evs
+	}()
+
+	var evs []mega.Event
+	select {
+	case evs = <-done:
+	case <-time.After(30 * time.Second):
+		p.Stop()
+		t.Fatal("retry now did not cut the backoff short")
+	}
+	if s := endStatus(t, evs); s != 0 {
+		t.Fatalf("end status %d; events %#v", s, evs)
+	}
+	if got := mustRead(t, filepath.Join(dest, "readme.txt")); !bytes.Equal(got, readme) {
+		t.Error("content mismatch after the skipped wait")
+	}
+}
+
+// A nudge that arrives with nothing waiting must not carry over and swallow the
+// next wait, which would put the download back to hammering a closed door.
+func TestRetryNowBeforeAnyWaitDoesNotCarryOver(t *testing.T) {
+	nudge := make(chan struct{}, 1)
+	s := session{events: make(chan mega.Event, 4), nudge: nudge}
+	nudge <- struct{}{} // pressed while nothing was retrying
+
+	start := time.Now()
+	const delay = 60 * time.Millisecond
+	if !s.waitRetry(context.Background(), mega.RetryEvent{Delay: delay}) {
+		t.Fatal("wait reported cancellation")
+	}
+	if elapsed := time.Since(start); elapsed < delay {
+		t.Errorf("wait lasted %s, want the full %s: a stale nudge skipped it", elapsed, delay)
+	}
+}
+
+func TestRetryReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReason string
+		wantStatus int
+	}{
+		{"quota", httpStatusErr(509), "transfer quota exceeded", 509},
+		{"busy", httpStatusErr(500), "server busy", 500},
+		{"gateway", httpStatusErr(503), "server busy", 503},
+		{"other status", httpStatusErr(403), "server returned 403", 403},
+		{"stalled", errStalled, "no data from server", 0},
+		{"network", context.DeadlineExceeded, "connection failed", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason, status := retryReason(tt.err)
+			if reason != tt.wantReason || status != tt.wantStatus {
+				t.Errorf("retryReason(%v) = %q, %d; want %q, %d",
+					tt.err, reason, status, tt.wantReason, tt.wantStatus)
+			}
+		})
 	}
 }
 

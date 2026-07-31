@@ -74,11 +74,11 @@ type downloadsModel struct {
 	// noticeErr renders the current notice as a failure. Set it only through
 	// setNotice/setNoticeErr so a later success notice can't inherit the red.
 	noticeErr bool
-	// quotaDismissed remembers that esc hid the quota banner. It covers the
-	// one stall that was showing then: the engine keeps reporting a stall
-	// until bytes move again, and once they do the next stall is news and
-	// speaks up. reload clears it.
-	quotaDismissed bool
+	// retryDismissed remembers that esc hid the retry strip. It covers the one
+	// wait that was showing then: the engine keeps reporting a retry until
+	// bytes move again, and once they do the next failure is news and speaks
+	// up. reload clears it.
+	retryDismissed bool
 
 	// cursorAnims animates each pane's cursor bar when focus moves between
 	// them; the zero value is a bar at rest at whatever width its pane calls
@@ -153,10 +153,10 @@ func (m *downloadsModel) reload() {
 	if m.cursor >= len(m.rows) {
 		m.cursor = max(0, len(m.rows)-1)
 	}
-	if m.app.eng != nil && !m.app.eng.Snapshot().QuotaStalled {
-		// nothing is being throttled any more, so there is no dismissal left
-		// to honour; the banner is already gone on its own
-		m.quotaDismissed = false
+	if snap := m.snapshot(); !snap.QuotaStalled && !snap.Retry.Waiting() {
+		// nothing is failing any more, so there is no dismissal left to
+		// honour; the strip is already gone on its own
+		m.retryDismissed = false
 	}
 	m.loadFiles()
 }
@@ -556,12 +556,19 @@ func (m *downloadsModel) focusFile(downloadID int64, file *db.File) bool {
 // it goes away with the selection.
 func (m *downloadsModel) dismissDetail() {
 	m.setNotice("")
-	if m.app == nil || m.app.eng == nil {
-		return
+	if snap := m.snapshot(); snap.QuotaStalled || snap.Retry.Waiting() {
+		m.retryDismissed = true
 	}
-	if m.app.eng.Snapshot().QuotaStalled {
-		m.quotaDismissed = true
+}
+
+// snapshot is the engine's view of the active download, or the zero value when
+// there is no engine to ask — which the views read the same way they read an
+// idle one.
+func (m *downloadsModel) snapshot() engine.Snapshot {
+	if m == nil || m.app == nil || m.app.eng == nil {
+		return engine.Snapshot{}
 	}
+	return m.app.eng.Snapshot()
 }
 
 // queued reports whether dl is in the download queue, and so whether removing
@@ -1526,10 +1533,12 @@ func fileMarker(st fileMarkerState, spin string) string {
 // confirmations and notices.
 func (m *downloadsModel) detailView(width int) string {
 	var lines []string
-	snap := m.app.eng.Snapshot()
+	snap := m.snapshot()
 
-	if snap.QuotaStalled && !m.quotaDismissed {
-		lines = append(lines, " "+styleError.Render("QUOTA — mega is throttling, retrying"))
+	if !m.retryDismissed {
+		if line := retryLine(snap); line != "" {
+			lines = append(lines, " "+line)
+		}
 	}
 
 	// The held queue head already says the same thing more precisely in the
@@ -1559,6 +1568,38 @@ func (m *downloadsModel) detailView(width int) string {
 		lines = append(lines, " "+style.Render(m.notice))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// retryLine describes the backoff the driver is sitting in: why the chunk
+// failed, how much of the wait is left, and the key that skips it. The
+// remaining time is computed from the deadline every render, so it counts down
+// on the app's own clock rather than waiting on the engine to say anything.
+//
+// A quota stall keeps its banner once the wait itself is over, since it is the
+// one failure the queue may act on by itself when the run gives up. Empty when
+// nothing is retrying.
+func retryLine(snap engine.Snapshot) string {
+	r := snap.Retry
+	if !r.Waiting() {
+		if snap.QuotaStalled {
+			return styleError.Render("QUOTA — mega is throttling, retrying")
+		}
+		return ""
+	}
+
+	when := "retrying now"
+	if d := r.Remaining(); d > 0 {
+		when = "retrying in " + countdownText(d)
+	}
+	style := styleWarn
+	if snap.QuotaStalled {
+		style = styleError
+	}
+	line := style.Render(r.Reason + " — " + when)
+	if r.Attempt > 1 {
+		line += styleDim.Render(fmt.Sprintf("  attempt %d", r.Attempt))
+	}
+	return line + "  " + styleHelpKey.Render(retryKey) + styleDim.Render(" retry now")
 }
 
 // Markers for both panes. Every glyph must stay one cell wide so the name

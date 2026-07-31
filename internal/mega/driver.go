@@ -14,6 +14,9 @@ type Proc interface {
 	Events() <-chan Event
 	// Stop asks the download to terminate. Partial files stay resumable.
 	Stop()
+	// RetryNow cuts short the wait a RetryEvent announced, so the next attempt
+	// starts immediately. A no-op when nothing is waiting.
+	RetryNow()
 }
 
 // DownloadArgs describes a download request.

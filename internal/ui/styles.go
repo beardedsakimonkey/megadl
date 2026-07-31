@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -351,6 +352,24 @@ func etaStyled(text string) string {
 		return text
 	}
 	return before + styleDim.Render("~") + after
+}
+
+// countdownText renders a wait the app is timing rather than projecting, so
+// unlike etaText it carries no tilde and keeps its seconds all the way up:
+// "14s", "3m 42s", "1h 09m". Part-seconds round up, the way a countdown has
+// to: the last second of the wait reads "1s", and "0s" means the wait is over
+// rather than nearly.
+func countdownText(d time.Duration) string {
+	n := int64(math.Ceil(d.Seconds()))
+	switch {
+	case n <= 0:
+		return "0s"
+	case n < 60:
+		return fmt.Sprintf("%ds", n)
+	case n < 3600:
+		return fmt.Sprintf("%dm %02ds", n/60, n%60)
+	}
+	return fmt.Sprintf("%dh %02dm", n/3600, n/60%60)
 }
 
 // percentText renders frac as a fixed-width percentage. It rounds down, the

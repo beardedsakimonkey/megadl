@@ -157,18 +157,33 @@ func (d *Driver) List(ctx context.Context, rawURL string) ([]mega.Node, error) {
 type proc struct {
 	events chan mega.Event
 	cancel context.CancelFunc
+	nudge  chan struct{}
 }
 
 func (p *proc) Events() <-chan mega.Event { return p.events }
 func (p *proc) Stop()                     { p.cancel() }
 
+// RetryNow drops a nudge for whatever backoff is waiting. Nothing waiting
+// means the buffered slot simply holds it until the next wait drains it, so
+// pressing it between attempts costs nothing.
+func (p *proc) RetryNow() {
+	select {
+	case p.nudge <- struct{}{}:
+	default:
+	}
+}
+
 // Start launches a download and streams file/progress/completion events.
 // Partial files persist as .megatmp.<handle> and resume.
 func (d *Driver) Start(ctx context.Context, args mega.DownloadArgs) (mega.Proc, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	p := &proc{events: make(chan mega.Event, 64), cancel: cancel}
+	p := &proc{
+		events: make(chan mega.Event, 64),
+		cancel: cancel,
+		nudge:  make(chan struct{}, 1),
+	}
 	go func() {
-		status := d.runLink(ctx, args, p.events)
+		status := d.runLink(ctx, args, session{events: p.events, nudge: p.nudge})
 		if err := ctx.Err(); err != nil {
 			p.events <- mega.ExitEvent{Err: err}
 		} else {
@@ -180,10 +195,10 @@ func (d *Driver) Start(ctx context.Context, args mega.DownloadArgs) (mega.Proc, 
 	return p, nil
 }
 
-func (d *Driver) runLink(ctx context.Context, args mega.DownloadArgs, events chan<- mega.Event) int {
+func (d *Driver) runLink(ctx context.Context, args mega.DownloadArgs, s session) int {
 	l, err := parseLink(args.URL)
 	if err != nil {
-		events <- mega.ErrorEvent{Message: err.Error()}
+		s.events <- mega.ErrorEvent{Message: err.Error()}
 		return 1
 	}
 
@@ -193,7 +208,7 @@ func (d *Driver) runLink(ctx context.Context, args mega.DownloadArgs, events cha
 			if ctx.Err() != nil {
 				return 1
 			}
-			events <- mega.ErrorEvent{Message: "Can't get file info: " + err.Error()}
+			s.events <- mega.ErrorEvent{Message: "Can't get file info: " + err.Error()}
 			return 1
 		}
 		// a non-directory path is the exact local file name
@@ -206,7 +221,7 @@ func (d *Driver) runLink(ctx context.Context, args mega.DownloadArgs, events cha
 			size: info.size, handle: l.handle, key: info.key,
 			getURL: func(context.Context) (string, int64, error) { return info.url, info.size, nil },
 		}
-		if !d.syncFile(ctx, events, job) {
+		if !d.syncFile(ctx, s, job) {
 			return 1
 		}
 		return 0
@@ -217,19 +232,19 @@ func (d *Driver) runLink(ctx context.Context, args mega.DownloadArgs, events cha
 		if ctx.Err() != nil {
 			return 1
 		}
-		events <- mega.ErrorEvent{Message: "Can't open folder: " + err.Error()}
+		s.events <- mega.ErrorEvent{Message: "Can't open folder: " + err.Error()}
 		return 1
 	}
 	if err := os.MkdirAll(args.Path, 0o755); err != nil {
-		events <- mega.ErrorEvent{Message: err.Error()}
+		s.events <- mega.ErrorEvent{Message: err.Error()}
 		return 1
 	}
-	jobs, status := planJobs(fs, args, events)
+	jobs, status := planJobs(fs, args, s.events)
 	for _, job := range jobs {
 		if ctx.Err() != nil {
 			break
 		}
-		if !d.syncFile(ctx, events, job) {
+		if !d.syncFile(ctx, s, job) {
 			status = 1
 		}
 	}

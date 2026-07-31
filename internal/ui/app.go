@@ -21,6 +21,11 @@ import (
 // engineMsg signals that engine/db state changed.
 type engineMsg struct{}
 
+// retryKey skips the wait between chunk attempts. It is offered by the retry
+// line itself rather than the shortcut row, since it is only ever worth
+// pressing while that line is up.
+const retryKey = "t"
+
 // tickMsg refreshes rates and the clock-driven quota window.
 type tickMsg time.Time
 
@@ -263,6 +268,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.eng.SetPaused(!a.eng.Paused())
 			a.downloads.setNotice("")
 			return a, nil
+		case retryKey:
+			// Only claimed while there is a wait to skip; with nothing
+			// retrying the key falls through to the panes below, which is
+			// where it would go if this case didn't exist.
+			if a.eng.Snapshot().Retry.Waiting() {
+				a.eng.RetryNow()
+				a.downloads.setNotice("")
+				return a, nil
+			}
 		}
 	}
 

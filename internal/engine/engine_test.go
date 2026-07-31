@@ -26,6 +26,7 @@ type fakeDriver struct {
 	runs    []driverRun
 	started []mega.DownloadArgs
 	stops   int
+	retries int
 
 	// beforeStart, when set, runs as the numbered process is about to start,
 	// which is where a test can hold the engine between two runs.
@@ -66,6 +67,11 @@ func (d *fakeDriver) Start(ctx context.Context, args mega.DownloadArgs) (mega.Pr
 		onStop: func() {
 			d.mu.Lock()
 			d.stops++
+			d.mu.Unlock()
+		},
+		onRetry: func() {
+			d.mu.Lock()
+			d.retries++
 			d.mu.Unlock()
 		},
 	}
@@ -114,13 +120,33 @@ func (d *fakeDriver) stopCount() int {
 	return d.stops
 }
 
+func (d *fakeDriver) retryCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.retries
+}
+
 type fakeProc struct {
-	events chan mega.Event
-	cancel context.CancelFunc
-	onStop func()
+	events  chan mega.Event
+	cancel  context.CancelFunc
+	onStop  func()
+	onRetry func()
+}
+
+// quotaRetry is the event a 509 produces: a backoff with a long enough wait
+// that it is still counting down while a test looks at it.
+func quotaRetry() mega.RetryEvent {
+	return mega.RetryEvent{
+		Reason:  "transfer quota exceeded",
+		Detail:  "Server returned 509 (over quota)",
+		Status:  509,
+		Attempt: 1,
+		Delay:   time.Minute,
+	}
 }
 
 func (p *fakeProc) Events() <-chan mega.Event { return p.events }
+func (p *fakeProc) RetryNow()                 { p.onRetry() }
 func (p *fakeProc) Stop() {
 	p.onStop()
 	p.cancel()
@@ -385,12 +411,10 @@ func TestEnginePauseSurvivesRestart(t *testing.T) {
 // Quota is not a per-download outcome: it holds the whole queue, with a reason
 // that outlives the process so the UI can still explain the pause.
 func TestEngineQuotaPausesTheQueue(t *testing.T) {
-	line := "Server returned 509 (over quota)"
 	drv := newFakeDriver(driverRun{
 		events: []mega.Event{
 			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
-			mega.QuotaEvent{Line: line},
-			mega.StderrEvent{Line: line},
+			quotaRetry(),
 		},
 	})
 
@@ -433,7 +457,7 @@ func TestEngineQuotaClearsWhenBytesResume(t *testing.T) {
 		events: []mega.Event{
 			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
 			mega.ProgressEvent{Done: -1, Total: 100},
-			mega.QuotaEvent{Line: "Server returned 509 (over quota)"},
+			quotaRetry(),
 			mega.ProgressEvent{Done: 40, Total: 100},
 		},
 		waitForStop: true,
@@ -458,6 +482,94 @@ func TestEngineQuotaClearsWhenBytesResume(t *testing.T) {
 	}
 	if eng.Paused() {
 		t.Fatal("a stall that cleared must not pause the queue")
+	}
+}
+
+// The retry the driver reports has to reach the snapshot whole — reason,
+// attempt, and a deadline the UI can count down — since a formatted line is
+// exactly what the UI cannot do anything with.
+func TestEngineSnapshotCarriesTheRetryWait(t *testing.T) {
+	drv := newFakeDriver(driverRun{
+		events: []mega.Event{
+			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+			mega.RetryEvent{Reason: "server busy", Status: 500, Attempt: 3, Delay: time.Minute},
+		},
+		waitForStop: true,
+	})
+
+	d := testDB(t)
+	id := insertDownload(t, d)
+
+	eng := New(drv, d)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eng.Run(ctx)
+	eng.Kick()
+	waitActive(t, eng, id)
+	waitRetry(t, eng, true)
+
+	r := eng.Snapshot().Retry
+	if r.Reason != "server busy" || r.Attempt != 3 {
+		t.Errorf("retry = %q attempt %d, want \"server busy\" attempt 3", r.Reason, r.Attempt)
+	}
+	if left := r.Remaining(); left <= 0 || left > time.Minute {
+		t.Errorf("remaining = %s, want a countdown inside the minute the driver asked for", left)
+	}
+	if eng.Snapshot().QuotaStalled {
+		t.Error("a 500 is not the transfer quota")
+	}
+
+	// Skipping the wait has to reach the driver and take the countdown down
+	// with it: nothing announces the attempt that follows, so a wait left in
+	// the snapshot would sit at zero until the attempt failed again.
+	eng.RetryNow()
+	if got := drv.retryCount(); got != 1 {
+		t.Errorf("driver retry nudges = %d, want 1", got)
+	}
+	if eng.Snapshot().Retry.Waiting() {
+		t.Error("countdown outlived the skip")
+	}
+}
+
+// A retry that got past its wait is over, so the countdown goes out with the
+// first bytes that land rather than sitting on screen at zero.
+func TestEngineRetryClearsWhenBytesResume(t *testing.T) {
+	drv := newFakeDriver(driverRun{
+		events: []mega.Event{
+			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+			mega.ProgressEvent{Done: -1, Total: 100},
+			mega.RetryEvent{Reason: "server busy", Status: 500, Attempt: 1, Delay: time.Minute},
+			mega.ProgressEvent{Done: 40, Total: 100},
+		},
+		waitForStop: true,
+	})
+
+	d := testDB(t)
+	id := insertDownload(t, d)
+
+	eng := New(drv, d)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eng.Run(ctx)
+	eng.Kick()
+	waitActive(t, eng, id)
+	waitRetry(t, eng, false)
+}
+
+// waitRetry blocks until the snapshot is reporting a retry wait, or has
+// stopped reporting one, as asked.
+func waitRetry(t *testing.T, eng *Engine, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		snap := eng.Snapshot()
+		if snap.Retry.Waiting() == want && (want || snap.FileDone > 0) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retry wait = %v, want %v; snapshot %+v", !want, want, snap)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

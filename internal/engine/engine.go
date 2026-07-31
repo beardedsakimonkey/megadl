@@ -41,12 +41,37 @@ type Snapshot struct {
 	// that is. It is zero until a transfer has actually measured one.
 	AvgRate      float64
 	QuotaStalled bool
-	StderrTail   []string
+	// Retry describes the wait between a failed chunk and the next attempt.
+	// Its zero value means nothing is waiting.
+	Retry RetryWait
 
 	// Paused holds for the queue as a whole, so it is reported whether or not
 	// a download is active. PauseReason is empty when the user did it.
 	Paused      bool
 	PauseReason string
+}
+
+// RetryWait is a driver backoff in progress: why the chunk failed, which
+// attempt is next, and when it is due. It is held as a deadline rather than a
+// remaining duration so the UI can count it down between engine events, on its
+// own clock, without the engine having to tick anything.
+type RetryWait struct {
+	Reason  string
+	Attempt int
+	Until   time.Time
+}
+
+// Waiting reports whether a backoff is in progress. It stays true once the
+// deadline passes: the attempt it is waiting on has started but not yet said
+// anything, and "retrying" is still what is happening.
+func (r RetryWait) Waiting() bool { return !r.Until.IsZero() }
+
+// Remaining is how much of the wait is left, floored at zero.
+func (r RetryWait) Remaining() time.Duration {
+	if !r.Waiting() {
+		return 0
+	}
+	return max(0, time.Until(r.Until))
 }
 
 type active struct {
@@ -63,6 +88,7 @@ type active struct {
 	sessionDone  int64 // last raw progress value
 	completed    int64 // bytes of finished/skipped files
 	quotaStalled bool
+	retry        RetryWait
 	stopping     bool
 	paused       bool // held by the user or by quota; stays in the queue
 	requeue      bool // restart with a changed file selection after exit
@@ -70,7 +96,6 @@ type active struct {
 	fileFailed   bool
 	endStatus    int
 	gotEnd       bool
-	stderrTail   []string
 
 	rate rateMeter // what the transfer is doing now
 	avg  rateMeter // ...smoothed, for projecting finish times
@@ -257,6 +282,7 @@ func (e *Engine) consume(a *active) {
 				a.fileSize = ev.Size
 			}
 			a.sessionTotal, a.sessionDone = 0, 0
+			a.retry = RetryWait{} // whatever the last file was waiting on is over
 
 		case mega.ProgressEvent:
 			switch {
@@ -277,6 +303,7 @@ func (e *Engine) consume(a *active) {
 					// banner — and the pause finish would impose — describe a
 					// throttle that is current, not one a retry already got past.
 					a.quotaStalled = false
+					a.retry = RetryWait{}
 				}
 				// regression = chunk retry; re-fetched bytes count as
 				// they stream in again, so just re-baseline
@@ -306,15 +333,21 @@ func (e *Engine) consume(a *active) {
 		case mega.ErrorEvent:
 			a.lastError = ev.Message
 
-		case mega.QuotaEvent:
-			// The driver keeps retrying inside its own window; the banner
-			// says so. Only an exit turns this into a paused queue.
-			a.quotaStalled = true
-
-		case mega.StderrEvent:
-			a.stderrTail = append(a.stderrTail, ev.Line)
-			if len(a.stderrTail) > 30 {
-				a.stderrTail = a.stderrTail[len(a.stderrTail)-30:]
+		case mega.RetryEvent:
+			a.retry = RetryWait{
+				Reason:  ev.Reason,
+				Attempt: ev.Attempt,
+				Until:   time.Now().Add(ev.Delay),
+			}
+			// Worth keeping as the failure message: if the run gives up
+			// without reaching a file error, this is what went wrong.
+			if ev.Detail != "" {
+				a.lastError = ev.Detail
+			}
+			if ev.Status == 509 {
+				// The driver keeps retrying inside its own window; the banner
+				// says so. Only an exit turns this into a paused queue.
+				a.quotaStalled = true
 			}
 
 		case mega.EndEvent:
@@ -360,9 +393,6 @@ func (e *Engine) finishLocked(a *active, exitErr error) {
 		e.setPausedLocked(true, "daily transfer quota exceeded")
 	default:
 		msg := a.lastError
-		if msg == "" && len(a.stderrTail) > 0 {
-			msg = a.stderrTail[len(a.stderrTail)-1]
-		}
 		if msg == "" && exitErr != nil {
 			msg = exitErr.Error()
 		}
@@ -441,6 +471,25 @@ func (e *Engine) Dequeue(id int64) {
 		e.act.proc.Stop()
 	}
 	e.mu.Unlock()
+	e.notify()
+}
+
+// RetryNow cuts short the backoff the active download is waiting out, so the
+// next attempt starts immediately. The wait is cleared here rather than waited
+// on: the driver says nothing when an attempt begins, so the countdown has to
+// stop when the user skips it or it would sit at zero until the attempt either
+// lands bytes or fails again.
+func (e *Engine) RetryNow() {
+	e.mu.Lock()
+	a := e.act
+	if a != nil {
+		a.retry = RetryWait{}
+	}
+	e.mu.Unlock()
+	if a == nil {
+		return
+	}
+	a.proc.RetryNow()
 	e.notify()
 }
 
@@ -621,7 +670,7 @@ func (e *Engine) Snapshot() Snapshot {
 		Rate:         a.rate.rate(),
 		AvgRate:      a.avg.rate(),
 		QuotaStalled: a.quotaStalled,
-		StderrTail:   append([]string(nil), a.stderrTail...),
+		Retry:        a.retry,
 		Paused:       e.paused,
 		PauseReason:  e.pauseReason,
 	}
