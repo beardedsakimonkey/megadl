@@ -468,11 +468,7 @@ func renderShortcuts(shortcuts ...shortcut) string {
 	for _, shortcut := range shortcuts {
 		keys := make([]string, 0, len(shortcut.keys))
 		for _, key := range shortcut.keys {
-			parts := strings.Split(key, "/")
-			for i := range parts {
-				parts[i] = styleHelpKey.Render(parts[i])
-			}
-			keys = append(keys, strings.Join(parts, styleDim.Render("/")))
+			keys = append(keys, styleHelpKey.Render(key))
 		}
 		rendered = append(rendered,
 			strings.Join(keys, styleDim.Render(" or "))+" "+styleDim.Render(shortcut.label))

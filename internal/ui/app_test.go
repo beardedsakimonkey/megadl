@@ -29,13 +29,12 @@ func TestFooterStylesOnlyShortcutKeyAsBrightAndBold(t *testing.T) {
 	}
 }
 
-func TestShortcutStylesSlashesBetweenKeysAsDim(t *testing.T) {
+func TestShortcutStylesFilterKeyAsBoldAndColored(t *testing.T) {
 	got := renderShortcuts(shortcut{
-		keys:  []string{"p/space"},
-		label: "pause",
+		keys:  []string{"/"},
+		label: "filter",
 	})
-	want := styleHelpKey.Render("p") + styleDim.Render("/") +
-		styleHelpKey.Render("space") + " " + styleDim.Render("pause")
+	want := styleHelpKey.Render("/") + " " + styleDim.Render("filter")
 	if got != want {
 		t.Fatalf("shortcut = %q, want %q", got, want)
 	}
