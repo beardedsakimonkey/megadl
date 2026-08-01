@@ -29,10 +29,19 @@ const (
 )
 
 type downloadsModel struct {
-	app    *App
+	app *App
+	// all is every download in the library, in list order, and rows the part of
+	// it the pane draws: the filter narrows one into the other. The cursor
+	// indexes rows, so everything the panes do follows what is on screen, while
+	// the queue and the status bar read all and so keep describing work the
+	// filter is hiding.
+	all    []*db.Download
 	rows   []*db.Download
 	cursor int
 	scroll int
+	// filter is the prompt at the top of the downloads pane and the query it
+	// narrows the list by.
+	filter listFilter
 
 	pane     paneID
 	files    []db.File
@@ -74,11 +83,6 @@ type downloadsModel struct {
 	// noticeErr renders the current notice as a failure. Set it only through
 	// setNotice/setNoticeErr so a later success notice can't inherit the red.
 	noticeErr bool
-	// retryDismissed remembers that esc hid the retry strip. It covers the one
-	// wait that was showing then: the engine keeps reporting a retry until
-	// bytes move again, and once they do the next failure is news and speaks
-	// up. reload clears it.
-	retryDismissed bool
 
 	// cursorAnims animates each pane's cursor bar when focus moves between
 	// them; the zero value is a bar at rest at whatever width its pane calls
@@ -138,7 +142,8 @@ func (m *downloadsModel) restore() {
 func (m *downloadsModel) reload() {
 	rows, err := m.app.db.Downloads()
 	if err == nil {
-		m.rows = rows
+		m.all = rows
+		m.rows = filterDownloads(rows, m.query())
 	}
 	if counts, err := m.app.db.FileCounts(); err == nil {
 		m.fileCounts = counts
@@ -152,11 +157,6 @@ func (m *downloadsModel) reload() {
 	}
 	if m.cursor >= len(m.rows) {
 		m.cursor = max(0, len(m.rows)-1)
-	}
-	if snap := m.snapshot(); !snap.QuotaStalled && !snap.Retry.Waiting() {
-		// nothing is failing any more, so there is no dismissal left to
-		// honour; the strip is already gone on its own
-		m.retryDismissed = false
 	}
 	m.loadFiles()
 }
@@ -174,14 +174,15 @@ type queueHead struct {
 // queue head first. The engine takes a download's files in listing order, so
 // that is its first queued file still waiting — the one being fetched now, or
 // the one a paused queue is holding at. The partial is stat'ed here so View
-// never touches the filesystem.
+// never touches the filesystem. It looks through the whole library rather than
+// the filtered pane: what the queue is doing is not the list's business.
 func (m *downloadsModel) loadHead(queue []int64) {
 	m.head = queueHead{}
 	if len(queue) == 0 {
 		return
 	}
 	var dl *db.Download
-	for _, row := range m.rows {
+	for _, row := range m.all {
 		if row.ID == queue[0] {
 			dl = row
 			break
@@ -204,8 +205,11 @@ func (m *downloadsModel) loadHead(queue []int64) {
 }
 
 // selectNewDownload focuses a newly added library row and the first item in
-// its file pane. The first tree row may be a directory header or a file.
+// its file pane. The first tree row may be a directory header or a file. Any
+// filter is dropped on the way: it would more than likely hide the very row
+// that was just added.
 func (m *downloadsModel) selectNewDownload(id int64) {
+	m.resetFilter()
 	m.reload()
 	for i, dl := range m.rows {
 		if dl.ID != id {
@@ -340,7 +344,9 @@ func (m *downloadsModel) rememberFileCursor() {
 	}
 	row := m.tree[m.treeCursor]
 	m.cursorDir = row.path // set on directory rows only
-	for _, dl := range m.rows {
+	// the whole library, since a filter can come and go under a pane that is
+	// still showing the files of a download it now hides
+	for _, dl := range m.all {
 		if dl.ID != m.filesFor {
 			continue
 		}
@@ -414,16 +420,28 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
+		if m.filtering() {
+			// cursor blinks and clipboard reads belong to the prompt
+			return m.filterUpdate(msg)
+		}
 		return nil
 	}
-	// esc only silences the detail strip: it never moves the selection, so
-	// dropping a message can't cost you your place. Every other key clears
-	// the notice as a side effect of acting.
+	// an open prompt takes every key as text, shortcuts included
+	if m.filtering() {
+		return m.filterKey(key)
+	}
+	// esc clears the filter and nothing else: it never moves the selection, so
+	// dropping a query can't cost you your place. Every other key clears the
+	// notice as a side effect of acting.
 	if key.String() == "esc" {
-		m.dismissDetail()
+		m.clearFilter()
 		return nil
 	}
 	m.setNotice("")
+
+	if key.String() == "/" {
+		return m.startFilter()
+	}
 
 	if key.String() == "R" {
 		return m.refreshListing()
@@ -532,6 +550,12 @@ func (m *downloadsModel) focusHead() {
 // centered on it as z would, so the jump lands somewhere readable rather than
 // against an edge. It reports whether the download was still in the list.
 func (m *downloadsModel) focusFile(downloadID int64, file *db.File) bool {
+	if m.filterHides(downloadID) {
+		// landing on that row is the whole point of the jump, so a filter in
+		// the way gives up rather than turning the jump into "nothing queued"
+		m.resetFilter()
+		m.reload()
+	}
 	for i, dl := range m.rows {
 		if dl.ID != downloadID {
 			continue
@@ -549,16 +573,6 @@ func (m *downloadsModel) focusFile(downloadID int64, file *db.File) bool {
 		return true
 	}
 	return false
-}
-
-// dismissDetail hides what the detail strip is saying right now. A selected
-// row's error is left alone: it describes the row rather than the moment, and
-// it goes away with the selection.
-func (m *downloadsModel) dismissDetail() {
-	m.setNotice("")
-	if snap := m.snapshot(); snap.QuotaStalled || snap.Retry.Waiting() {
-		m.retryDismissed = true
-	}
 }
 
 // snapshot is the engine's view of the active download, or the zero value when
@@ -747,10 +761,11 @@ func (m *downloadsModel) mouse(msg tea.MouseMsg) tea.Cmd {
 }
 
 // clickDownload selects the download on body row y and toggles its queue
-// membership on a double click.
+// membership on a double click. The filter prompt is not a row to land on, so
+// a click on it does nothing.
 func (m *downloadsModel) clickDownload(y int) {
-	i := m.scroll + y
-	if i >= len(m.rows) {
+	i := m.scroll + y - m.listHeader()
+	if i < 0 || i >= len(m.rows) {
 		return
 	}
 	double := m.clicks.press(clickDownload, i)
@@ -823,9 +838,19 @@ func (m *downloadsModel) moveCursor(delta int) {
 	m.loadFiles()
 }
 
-// listPageSize is a page of the downloads pane, which has no title line.
+// listPageSize is a page of the downloads pane, which has no line of its own
+// above the rows unless the filter prompt is up.
 func (m *downloadsModel) listPageSize() int {
-	return max(1, m.paneHeight)
+	return max(1, m.paneHeight-m.listHeader())
+}
+
+// listHeader is how many rows of the downloads pane are spent before the first
+// download: one while the filter prompt is on screen, none otherwise.
+func (m *downloadsModel) listHeader() int {
+	if m.filterShown() {
+		return 1
+	}
+	return 0
 }
 
 func (m *downloadsModel) treePageSize() int {
@@ -1024,6 +1049,13 @@ func (m *downloadsModel) copyURL(url string) {
 }
 
 func (m *downloadsModel) help() string {
+	if m.filtering() {
+		return renderShortcuts(
+			shortcut{keys: []string{"⏎"}, label: "accept"},
+			shortcut{keys: []string{"esc"}, label: "clear"},
+			shortcut{keys: []string{"↑/↓"}, label: "move"},
+		)
+	}
 	if m.pane == paneFiles {
 		return renderShortcuts(
 			shortcut{keys: []string{"j/k"}, label: "move"},
@@ -1035,6 +1067,7 @@ func (m *downloadsModel) help() string {
 			shortcut{keys: []string{"r"}, label: "rename"},
 			shortcut{keys: []string{"R"}, label: "refresh"},
 			shortcut{keys: []string{"h"}, label: "back"},
+			m.filterShortcut(),
 			shortcut{keys: []string{"q"}, label: "quit"},
 			shortcut{keys: []string{"z"}, label: "center"},
 		)
@@ -1050,8 +1083,19 @@ func (m *downloadsModel) help() string {
 		shortcut{keys: []string{"R"}, label: "refresh"},
 		shortcut{keys: []string{"d"}, label: "delete"},
 		shortcut{keys: []string{"y"}, label: "copy url"},
+		m.filterShortcut(),
 		shortcut{keys: []string{"q"}, label: "quit"},
 	)
+}
+
+// filterShortcut offers the key that acts on the filter: the one that opens it,
+// or — once the list is narrowed — the one that puts the rest of the library
+// back.
+func (m *downloadsModel) filterShortcut() shortcut {
+	if m.query() != "" {
+		return shortcut{keys: []string{"esc"}, label: "clear filter"}
+	}
+	return shortcut{keys: []string{"/"}, label: "filter"}
 }
 
 // pauseLabel names the half of the pause toggle that would happen next. It reads
@@ -1087,7 +1131,7 @@ func (m *downloadsModel) toggleLabel() string {
 
 func (m *downloadsModel) view(width, height int) string {
 	m.listW, m.filesW, m.paneHeight = width, 0, 0
-	if len(m.rows) == 0 {
+	if len(m.rows) == 0 && !m.filterShown() {
 		return styleDim.Render("\n  no downloads yet — press 'a' to add a mega.nz link")
 	}
 
@@ -1117,8 +1161,20 @@ func downloadPaneWidths(width int, hasFiles bool) (listW, filesW int) {
 	return listW, filesW
 }
 
-// listView renders the downloads column, keeping the cursor visible.
+// listView renders the downloads column, keeping the cursor visible. The filter
+// prompt, while it is up, takes the pane's first row and a download off the end
+// of it.
 func (m *downloadsModel) listView(width, height int) string {
+	var lines []string
+	if m.filterShown() {
+		lines = append(lines, m.filterView(width))
+		height = max(1, height-1)
+	}
+	if len(m.rows) == 0 {
+		// only reachable behind a filter: an empty library never gets this far
+		return strings.Join(append(lines, styleDim.Render("  no matches")), "\n")
+	}
+
 	if m.cursor < m.scroll {
 		m.scroll = m.cursor
 	}
@@ -1127,7 +1183,6 @@ func (m *downloadsModel) listView(width, height int) string {
 	}
 
 	snap := m.app.eng.Snapshot()
-	var lines []string
 	for i := m.scroll; i < min(len(m.rows), m.scroll+height); i++ {
 		lines = append(lines, m.rowView(m.rows[i], snap, i == m.cursor, width))
 	}
@@ -1137,7 +1192,7 @@ func (m *downloadsModel) listView(width, height int) string {
 func (m *downloadsModel) rowView(dl *db.Download, snap engine.Snapshot, selected bool, width int) string {
 	spin := m.app.spinFrame()
 	nameW := max(8, width-2-1-1-2)
-	name := truncate(dl.Name, nameW)
+	name := highlightQuery(truncate(dl.Name, nameW), m.query())
 
 	line := fmt.Sprintf("%s%s %s", m.cursorGutter(paneList, selected),
 		dlMarker(m.dlMarkerStateOf(dl, snap), spin), name)
@@ -1535,10 +1590,8 @@ func (m *downloadsModel) detailView(width int) string {
 	var lines []string
 	snap := m.snapshot()
 
-	if !m.retryDismissed {
-		if line := retryLine(snap); line != "" {
-			lines = append(lines, " "+line)
-		}
+	if line := retryLine(snap); line != "" {
+		lines = append(lines, " "+line)
 	}
 
 	// The held queue head already says the same thing more precisely in the

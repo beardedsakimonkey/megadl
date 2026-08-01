@@ -247,6 +247,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if key, ok := msg.(tea.KeyMsg); ok {
+		// The filter prompt is text, not a dialog, so it takes its keys here
+		// rather than through a modal flow: while it has focus every key is
+		// something to type — pastes included — and none of the single-key
+		// shortcuts below get a look in. Only ctrl+c still means quit.
+		if a.downloads.filtering() && key.Type != tea.KeyCtrlC {
+			return a, a.downloads.update(msg)
+		}
 		// pasting anywhere means "add this link": open the dialog and let
 		// the paste land in its URL prompt
 		if isPaste(key) {

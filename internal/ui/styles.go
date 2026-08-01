@@ -26,13 +26,18 @@ var (
 	styleCursor  = lipgloss.NewStyle().Foreground(colorPrimary)
 	styleRowTint = lipgloss.NewStyle().Background(lipgloss.Color("237"))
 
-	styleDim         = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	styleError       = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	styleOK          = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	styleWarn        = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	styleQueued      = lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
-	stylePartial     = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
-	styleAccent      = lipgloss.NewStyle().Foreground(colorPrimary)
+	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	styleError   = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	styleOK      = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	styleWarn    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	styleQueued  = lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
+	stylePartial = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	styleAccent  = lipgloss.NewStyle().Foreground(colorPrimary)
+	// styleMatch marks the part of a name the filter query matched. It only
+	// recolors the letters, leaving the row's own background — the cursor tint
+	// included — to show through. The accent is the prompt's own, so the query
+	// and its marks are visibly the same thing.
+	styleMatch       = lipgloss.NewStyle().Foreground(colorPrimary)
 	styleNotice      = lipgloss.NewStyle().Foreground(colorOrange)
 	stylePrimaryText = lipgloss.NewStyle().Foreground(colorPrimary)
 	styleProgress    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))

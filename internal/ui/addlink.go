@@ -113,7 +113,7 @@ func newAddlinkModel(app *App) *addlinkModel {
 		urlInput:     url,
 		nameInput:    name,
 		spin:         sp,
-		linkHistory:  submittedLinkHistory(app.downloads.rows),
+		linkHistory:  submittedLinkHistory(app.downloads.all),
 		historyIndex: -1,
 		width:        w,
 		pickerW:      modalContentWidth(app.width, pickerWidth),

@@ -1339,7 +1339,9 @@ func TestSpaceOnDownloadedFileNotices(t *testing.T) {
 	}
 }
 
-func TestEscDismissesNoticeAndKeepsSelection(t *testing.T) {
+// esc belongs to the filter now, so it leaves everything else where it found
+// it: the notice it used to dismiss, and the panes' own selection.
+func TestEscWithNoFilterLeavesTheViewAlone(t *testing.T) {
 	app, _, _ := toggleTestApp(t)
 	m := &app.downloads
 	m.pane = paneFiles
@@ -1347,17 +1349,11 @@ func TestEscDismissesNoticeAndKeepsSelection(t *testing.T) {
 	m.notice = "something happened"
 
 	m.update(tea.KeyMsg{Type: tea.KeyEsc})
-	if m.notice != "" {
-		t.Fatalf("notice = %q, want it dismissed", m.notice)
+	if m.notice != "something happened" {
+		t.Fatalf("notice = %q, want it left up", m.notice)
 	}
 	if m.pane != paneFiles || m.treeCursor != 1 {
 		t.Fatalf("esc moved the selection: pane %v, file cursor %d", m.pane, m.treeCursor)
-	}
-
-	// esc with nothing to dismiss still leaves the panes alone; h goes back
-	m.update(tea.KeyMsg{Type: tea.KeyEsc})
-	if m.pane != paneFiles {
-		t.Fatal("esc left the files pane")
 	}
 	pressKey(m, "h")
 	if m.pane != paneList {
@@ -1497,7 +1493,10 @@ func (p *stalledProc) Events() <-chan mega.Event { return p.events }
 func (p *stalledProc) Stop()                     { p.stopOnce.Do(func() { close(p.stop) }) }
 func (p *stalledProc) RetryNow()                 {}
 
-func TestEscDismissesQuotaBanner(t *testing.T) {
+// The banner describes a stall that is happening now, so it stays up for as
+// long as the engine keeps reporting one. Nothing hides it: the only key that
+// used to belongs to the filter now.
+func TestQuotaBannerStaysUpWhileStalled(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	app.eng = engine.New(stalledDriver{}, database)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1520,13 +1519,9 @@ func TestEscDismissesQuotaBanner(t *testing.T) {
 	}
 
 	m.update(tea.KeyMsg{Type: tea.KeyEsc})
-	if strings.Contains(m.detailView(80), "quota exceeded") {
-		t.Fatal("esc did not dismiss the quota banner")
-	}
-	// still hidden on later frames, since the engine keeps reporting the stall
 	pressKey(m, "j")
-	if strings.Contains(m.detailView(80), "quota exceeded") {
-		t.Fatal("quota banner came back after being dismissed")
+	if !strings.Contains(m.detailView(80), "quota exceeded") {
+		t.Fatal("quota banner went away while the engine was still stalled")
 	}
 }
 
@@ -1597,8 +1592,7 @@ func waitStall(t *testing.T, eng *engine.Engine, want bool) {
 }
 
 // The banner describes a stall that is happening now, so bytes landing again
-// take it off screen — and take the esc dismissal with it, since the next stall
-// is news the user has not seen.
+// take it off screen — and a later stall puts it straight back up.
 func TestQuotaBannerClearsWhenBytesResume(t *testing.T) {
 	app, database, id := toggleTestApp(t)
 	proc := &pushProc{events: make(chan mega.Event, 8)}
@@ -1613,7 +1607,6 @@ func TestQuotaBannerClearsWhenBytesResume(t *testing.T) {
 	proc.events <- mega.FileStartEvent{Path: "/dl/Folder/a", Remote: "/Folder/a", Size: 100}
 	proc.events <- quotaRetry()
 	waitStall(t, app.eng, true)
-	m.update(tea.KeyMsg{Type: tea.KeyEsc})
 
 	proc.events <- mega.ProgressEvent{Done: -1, Total: 100}
 	proc.events <- mega.ProgressEvent{Done: 40, Total: 100}
