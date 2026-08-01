@@ -45,7 +45,6 @@ var (
 	styleSpinner     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleHelpKey     = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	styleDirectory   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	styleLogoMark    = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 	styleTitle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
 	// Leave the foreground unset so the active file's percentage follows the
 	// terminal's own text color.

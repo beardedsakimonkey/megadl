@@ -73,6 +73,8 @@ const (
 	// download don't fill the row. One bucket taking the whole window's
 	// approximate allowance is as steep as the row needs to go.
 	sparkFull = 5 << 30
+	// Keep the optional sparkline from crowding the title on compact headers.
+	headerSparkMinGap = 8
 )
 
 func NewApp(cfg *config.Config, database *db.DB, eng *engine.Engine, drv mega.Driver) *App {
@@ -324,8 +326,7 @@ func (a *App) View() string {
 }
 
 func (a *App) headerView() string {
-	title := styleLogoMark.Render(" ◣◥◤◢ ") +
-		stylePrimaryText.Bold(true).Render("ＭＥＧＡ") +
+	title := " " + stylePrimaryText.Bold(true).Render("ＭＥＧＡ") +
 		styleHelpKey.Bold(true).Render("ＤＬ")
 	quota := styleDim.Render("↓ ") +
 		quotaStyle(a.quota6h).Bold(true).Render(fmt.Sprintf("%.1f", float64(a.quota6h)/(1<<30))) +
@@ -334,7 +335,7 @@ func (a *App) headerView() string {
 	// both clear of the title; on a narrow terminal the number is what matters.
 	right := quota
 	if spark := a.sparkView(); spark != "" {
-		if wide := spark + "  " + quota; a.width-lipgloss.Width(title)-lipgloss.Width(wide)-1 >= 2 {
+		if wide := spark + "  " + quota; a.width-lipgloss.Width(title)-lipgloss.Width(wide)-1 >= headerSparkMinGap {
 			right = wide
 		}
 	}
