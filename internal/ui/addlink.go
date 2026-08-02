@@ -25,7 +25,6 @@ const (
 	stateURL addlinkState = iota
 	stateDecoding
 	stateListing
-	statePicker
 	stateName
 	stateFailed
 )
@@ -34,11 +33,6 @@ const (
 	decodeFrames        = 28
 	decodeFrameInterval = 40 * time.Millisecond
 )
-
-// pickerWidth caps the file picker higher than the other dialogs: it lists
-// names rather than sentences, and every extra cell is one less name that gets
-// truncated.
-const pickerWidth = 96
 
 var reFileLink = regexp.MustCompile(`(?i)mega(\.co)?\.nz/(#!|file/)`)
 var reFolderLink = regexp.MustCompile(`(?i)mega(\.co)?\.nz/(#F!|folder/)`)
@@ -70,19 +64,11 @@ type addlinkModel struct {
 	url      string
 	linkType string // "file" | "folder"
 	nodes    []mega.Node
-	picker   pickerModel
 	errMsg   string
 
 	// width is the dialog's content width, fixed when it opened so it never
-	// starts out wider than the terminal, and pickerW the wider one the file
-	// list is allowed.
-	width   int
-	pickerW int
-
-	// modal is where the last render placed the dialog, in body
-	// coordinates, so clicks can be mapped onto picker rows.
-	modal  rect
-	clicks clickTracker
+	// starts out wider than the terminal.
+	width int
 
 	decodeSrc    string // base64 text as pasted
 	decodeTarget string // decoded mega.nz link
@@ -116,7 +102,6 @@ func newAddlinkModel(app *App) *addlinkModel {
 		linkHistory:  submittedLinkHistory(app.downloads.all),
 		historyIndex: -1,
 		width:        w,
-		pickerW:      modalContentWidth(app.width, pickerWidth),
 	}
 }
 
@@ -282,11 +267,6 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 			m.errMsg = fmt.Sprintf("already in the library as %q", existing.Name)
 			return m, textinput.Blink
 		}
-		if m.linkType == "folder" && !(len(msg.nodes) == 1 && !msg.nodes[0].IsDir()) {
-			m.picker = newPicker(msg.nodes)
-			m.state = statePicker
-			return m, nil
-		}
 		return m.submit()
 
 	case decodeFrameMsg:
@@ -303,9 +283,6 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
-
-	case tea.MouseMsg:
-		return m.updateMouse(msg)
 
 	case tea.KeyMsg:
 		return m.updateKey(msg)
@@ -324,74 +301,6 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 		var cmd tea.Cmd
 		m.nameInput, cmd = m.nameInput.Update(msg)
 		return m, cmd
-	}
-	return m, nil
-}
-
-// pickerVisible is how many picker rows the modal shows; the scroll math and
-// the renderer have to agree on it or the cursor can drift out of view.
-func (m *addlinkModel) pickerVisible() int {
-	// The picker lives in the body, whose height changes when notices and the
-	// transfer strip add rows to the footer. Beyond the file rows, its modal
-	// spends vertical space on border/padding plus the blank line and summary
-	// rendered by picker.view.
-	height := m.app.bodyHeight
-	if height <= 0 {
-		// Direct model renders in tests may happen before App.View has recorded
-		// the body geometry. Preserve the ordinary no-footer sizing in that
-		// case; App.View replaces it with the exact current-frame height.
-		height = m.app.height - 4
-	}
-	chrome := styleModal.GetVerticalFrameSize() + 2
-	if m.errMsg != "" {
-		chrome += lipgloss.Height(wrap(m.errMsg, m.width))
-	}
-	return max(3, height-chrome)
-}
-
-// pickerRowsTop is the body row the picker's first entry renders on: the
-// modal's border — which carries the title — and its top padding.
-func (m *addlinkModel) pickerRowsTop() int {
-	return m.modal.y + styleModal.GetBorderTopSize() + styleModal.GetPaddingTop()
-}
-
-// pickerRowAt maps body coordinates onto a picker row index, or -1 when the
-// pointer isn't over one.
-func (m *addlinkModel) pickerRowAt(x, y int) int {
-	if !m.modal.contains(x, y) {
-		return -1
-	}
-	row := y - m.pickerRowsTop()
-	if row < 0 || row >= m.pickerVisible() {
-		return -1
-	}
-	if i := m.picker.offset + row; i < len(m.picker.rows) {
-		return i
-	}
-	return -1
-}
-
-// updateMouse drives the file picker; the other states are text prompts with
-// nothing to aim at.
-func (m *addlinkModel) updateMouse(msg tea.MouseMsg) (*addlinkModel, tea.Cmd) {
-	if m.state != statePicker {
-		return m, nil
-	}
-	if delta := wheelDelta(msg); delta != 0 {
-		m.picker.move(delta, m.pickerVisible())
-		return m, nil
-	}
-	if !leftPress(msg) {
-		return m, nil
-	}
-	row := m.pickerRowAt(msg.X, msg.Y)
-	if row < 0 {
-		return m, nil
-	}
-	m.errMsg = ""
-	m.picker.move(row-m.picker.cursor, m.pickerVisible())
-	if m.clicks.press(clickPicker, row) {
-		m.picker.toggle(row) // double click checks the row, like space
 	}
 	return m, nil
 }
@@ -440,46 +349,9 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 			return nil, nil
 		}
 
-	case statePicker:
-		visible := m.pickerVisible()
-		switch key.String() {
-		case "esc":
-			return nil, nil
-		case "up", "k", "K":
-			m.picker.move(-1, visible)
-		case "down", "j", "J":
-			m.picker.move(1, visible)
-		case "pgup":
-			m.picker.move(-visible, visible)
-		case "pgdown":
-			m.picker.move(visible, visible)
-		case "home":
-			m.picker.move(-len(m.picker.rows), visible)
-		case "end":
-			m.picker.move(len(m.picker.rows), visible)
-		case " ":
-			m.picker.toggle(m.picker.cursor)
-		case "A":
-			m.picker.setAll(true)
-		case "n":
-			m.picker.setAll(false)
-		case "enter":
-			if count, _ := m.picker.totals(); count == 0 {
-				m.errMsg = "nothing selected"
-				return m, nil
-			}
-			m.errMsg = ""
-			return m.submit()
-		}
-		return m, nil
-
 	case stateName:
 		switch key.String() {
 		case "esc":
-			if m.linkType == "folder" && len(m.picker.rows) > 0 {
-				m.state = statePicker
-				return m, nil
-			}
 			return nil, nil
 		case "enter":
 			if err := m.enqueue(m.nameInput.Value()); err != nil {
@@ -533,6 +405,19 @@ func (m *addlinkModel) promptName(name string) tea.Cmd {
 	return tea.Batch(m.nameInput.Focus(), textinput.Blink)
 }
 
+// totals is what the link will fetch: every file it lists, since nothing is
+// left out of the queue at this point.
+func (m *addlinkModel) totals() (count int, bytes int64) {
+	for _, n := range m.nodes {
+		if n.IsDir() {
+			continue
+		}
+		count++
+		bytes += n.Size
+	}
+	return
+}
+
 // pendingNames prevents collisions with not-yet-materialized downloads.
 func (m *addlinkModel) pendingNames() map[string]bool {
 	taken := map[string]bool{}
@@ -572,8 +457,7 @@ func (m *addlinkModel) enqueue(rawName string) error {
 	}
 
 	var files []db.File
-	switch {
-	case m.linkType == "file":
+	if m.linkType == "file" {
 		dl.TotalBytes = root.Size
 		files = append(files, db.File{
 			NodeHandle: root.Handle,
@@ -582,32 +466,15 @@ func (m *addlinkModel) enqueue(rawName string) error {
 			Size:       root.Size,
 			Queued:     true,
 		})
-
-	case len(m.picker.rows) == 0:
-		// folder link whose root is a single file (deep link)
-		dl.TotalBytes = root.Size
+	} else {
+		// a folder link queues everything it lists — a deep link to a single
+		// file included; files can be dropped from the queue afterwards in the
+		// file pane
 		dl.Selection = root.Handle
-		files = append(files, db.File{
-			NodeHandle: root.Handle,
-			RemotePath: root.Path,
-			LocalPath:  filepath.Join(dest, naming.Sanitize(root.Name)),
-			Size:       root.Size,
-			Queued:     true,
-		})
-		if err := os.MkdirAll(dest, 0o755); err != nil {
-			return err
-		}
-
-	default:
-		// every remote file is recorded; the ones left unselected stay
-		// visible outside the queue and can be added later from the file pane
-		dl.Selection = strings.Join(m.picker.minimalHandles(), ",")
 		files = listingFiles(dl.DestPath, m.nodes)
 		for i := range files {
-			files[i].Queued = m.picker.selected[files[i].NodeHandle]
-			if files[i].Queued {
-				dl.TotalBytes += files[i].Size
-			}
+			files[i].Queued = true
+			dl.TotalBytes += files[i].Size
 		}
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			return err
@@ -663,18 +530,10 @@ func (m *addlinkModel) help() string {
 		)
 	case stateListing:
 		return renderShortcuts(shortcut{keys: []string{"esc"}, label: "cancel"})
-	case statePicker:
-		return renderShortcuts(
-			shortcut{keys: []string{"space"}, label: "toggle"},
-			shortcut{keys: []string{"A"}, label: "all"},
-			shortcut{keys: []string{"n"}, label: "none"},
-			shortcut{keys: []string{"enter"}, label: "continue"},
-			shortcut{keys: []string{"esc"}, label: "cancel"},
-		)
 	case stateName:
 		return renderShortcuts(
 			shortcut{keys: []string{"enter"}, label: "start download"},
-			shortcut{keys: []string{"esc"}, label: "back"},
+			shortcut{keys: []string{"esc"}, label: "cancel"},
 		)
 	}
 	return renderShortcuts(shortcut{keys: []string{"esc"}, label: "close"})
@@ -701,16 +560,8 @@ func (m *addlinkModel) view() string {
 		title = "Add mega.nz link"
 		body = m.spin.View() + " fetching listing…\n" +
 			styleDim.Render(truncateMiddle(m.url, w))
-	case statePicker:
-		title, body = "Choose files", m.picker.view(m.pickerW, m.pickerVisible())
-		if m.errMsg != "" {
-			body += "\n" + styleError.Render(wrap(m.errMsg, w))
-		}
 	case stateName:
-		count, bytes := 1, m.nodes[0].Size
-		if len(m.picker.rows) > 0 {
-			count, bytes = m.picker.totals()
-		}
+		count, bytes := m.totals()
 		summary := fmt.Sprintf("%d file(s), %s → ", count, humanBytes(bytes))
 		title = "Name already taken"
 		body = m.nameInput.View() + "\n\n" +

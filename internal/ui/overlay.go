@@ -39,10 +39,6 @@ func promptWidth(in textinput.Model) int {
 // rect is a region of the terminal grid.
 type rect struct{ x, y, w, h int }
 
-func (r rect) contains(x, y int) bool {
-	return x >= r.x && x < r.x+r.w && y >= r.y && y < r.y+r.h
-}
-
 // overlayLayout crops fg to height and reports its lines together with the
 // region overlayCenter would place them in.
 func overlayLayout(fg string, width, height int) ([]string, rect) {
@@ -56,13 +52,6 @@ func overlayLayout(fg string, width, height int) ([]string, rect) {
 	}
 	w = min(w, width)
 	return lines, rect{x: (width - w) / 2, y: (height - len(lines)) / 2, w: w, h: len(lines)}
-}
-
-// overlayRect reports where overlayCenter places fg, so clicks can be mapped
-// back onto whatever the overlay drew.
-func overlayRect(fg string, width, height int) rect {
-	_, r := overlayLayout(fg, width, height)
-	return r
 }
 
 // overlayCenter composites fg centered over bg, treating bg as a width×height

@@ -2,12 +2,10 @@ package ui
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/ansi"
 
 	"megadl/internal/db"
 	"megadl/internal/engine"
@@ -19,18 +17,6 @@ func leftClick(x, y int) tea.MouseMsg {
 
 func wheel(button tea.MouseButton, x, y int) tea.MouseMsg {
 	return tea.MouseMsg{Action: tea.MouseActionPress, Button: button, X: x, Y: y}
-}
-
-// screenRow returns the terminal row a rendered frame drew want on.
-func screenRow(t *testing.T, frame, want string) int {
-	t.Helper()
-	for i, line := range strings.Split(frame, "\n") {
-		if strings.Contains(ansi.Strip(line), want) {
-			return i
-		}
-	}
-	t.Fatalf("frame does not contain %q:\n%s", want, frame)
-	return -1
 }
 
 // fakeClock drives the double-click window without sleeping.
@@ -282,49 +268,5 @@ func TestDoubleClickOnDirectoryHeaderDoesNotToggleFiles(t *testing.T) {
 	}
 	if m.notice != "" {
 		t.Fatalf("double click on a directory header set notice %q", m.notice)
-	}
-}
-
-func TestClickInPickerMovesCursorAndDoubleClickToggles(t *testing.T) {
-	app, _ := openAddlinkTestApp(t)
-	app.eng = engine.New(nil, nil)
-	app.width, app.height = 80, 24
-
-	m := newAddlinkModel(app)
-	m.linkType, m.state = "folder", statePicker
-	m.nodes = testNodes()
-	m.picker = newPicker(m.nodes)
-	app.addlink = m
-
-	// aim at the row the dialog actually drew e01.mkv on (picker row 2 of
-	// Root, S01, e01.mkv, e02.mkv, extra.txt)
-	row := screenRow(t, app.View(), "e01.mkv")
-
-	now, advance := fakeClock()
-	m.clicks.now = now
-
-	app.Update(leftClick(m.modal.x+4, row))
-	if m.picker.cursor != 2 {
-		t.Fatalf("picker cursor = %d, want the clicked row 2", m.picker.cursor)
-	}
-	if !m.picker.selected["e1"] {
-		t.Fatal("a single click cleared a checkbox, want it left alone")
-	}
-
-	advance(doubleClickInterval / 2)
-	app.Update(leftClick(m.modal.x+4, row))
-	if m.picker.selected["e1"] {
-		t.Fatal("double click did not clear the checkbox")
-	}
-
-	// clicks outside the dialog leave the picker alone
-	app.Update(leftClick(0, app.bodyTop))
-	if m.picker.cursor != 2 {
-		t.Fatalf("picker cursor = %d, want it unchanged by a click outside", m.picker.cursor)
-	}
-
-	app.Update(wheel(tea.MouseButtonWheelDown, m.modal.x+4, row))
-	if m.picker.cursor != 3 {
-		t.Fatalf("picker cursor = %d, want 3 after a wheel notch", m.picker.cursor)
 	}
 }

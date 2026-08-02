@@ -18,7 +18,6 @@ const (
 	clickNone clickKind = iota
 	clickDownload
 	clickFile
-	clickPicker
 )
 
 // clickTracker folds a stream of left presses into single and double clicks.

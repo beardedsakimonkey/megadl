@@ -2,7 +2,6 @@ package ui
 
 import (
 	"encoding/base64"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -176,48 +175,45 @@ func TestAddlinkFocusesNewDownload(t *testing.T) {
 	}
 }
 
-// A folder link keeps the picker; only the name prompt behind it is skipped.
-func TestAddlinkEnqueuesFromPickerWithoutNamePrompt(t *testing.T) {
+// A folder link asks nothing: every file it lists is queued as soon as the
+// listing lands.
+func TestAddlinkQueuesEveryFileInAFolderLink(t *testing.T) {
 	app, database := openAddlinkTestApp(t)
 
 	url := "https://mega.nz/folder/AAAAAAAA#key"
 	m := newAddlinkModel(app)
 	m.url, m.linkType, m.state = url, "folder", stateListing
-	model, _ := m.update(listResultMsg{
+	model, cmd := m.update(listResultMsg{
 		url: url,
 		nodes: []mega.Node{
 			{Path: "/Skins", Name: "Skins", Type: "folder", Handle: "root"},
-			{Path: "/Skins/a.zip", Name: "a.zip", Type: "file", Handle: "a", Size: 10},
+			{Path: "/Skins/a.zip", Name: "a.zip", Type: "file", Handle: "a", Parent: "root", Size: 10},
+			{Path: "/Skins/nested", Name: "nested", Type: "folder", Handle: "sub", Parent: "root"},
+			{Path: "/Skins/nested/b.zip", Name: "b.zip", Type: "file", Handle: "b", Parent: "sub", Size: 20},
 		},
 	})
-	if model == nil || model.state != statePicker {
-		t.Fatalf("state = %+v, want picker", model)
-	}
-
-	model, cmd := model.update(tea.KeyMsg{Type: tea.KeyEnter})
 	if model != nil || cmd != nil {
 		t.Fatalf("free name should close modal: model=%+v, cmd=%v", model, cmd)
 	}
+
 	rows, err := database.Downloads()
 	if err != nil || len(rows) != 1 || rows[0].Name != "Skins" {
 		t.Fatalf("downloads = %+v, %v", rows, err)
 	}
-}
-
-func TestAddlinkPickerUppercaseJKMoveCursor(t *testing.T) {
-	app, _ := openAddlinkTestApp(t)
-	m := newAddlinkModel(app)
-	m.state = statePicker
-	m.picker = newPicker(testNodes())
-
-	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
-	if m.picker.cursor != 1 {
-		t.Fatalf("J moved cursor to %d, want 1", m.picker.cursor)
+	if rows[0].TotalBytes != 30 {
+		t.Fatalf("total bytes = %d, want every listed file (30)", rows[0].TotalBytes)
 	}
-
-	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
-	if m.picker.cursor != 0 {
-		t.Fatalf("K moved cursor to %d, want 0", m.picker.cursor)
+	files, err := database.Files(rows[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("files = %+v, want both listed files", files)
+	}
+	for _, f := range files {
+		if !f.Queued {
+			t.Fatalf("file %q is not queued", f.NodeHandle)
+		}
 	}
 }
 
@@ -429,10 +425,6 @@ func addlinkStates(m *addlinkModel) []struct {
 			m.decodeFrame = decodeFrames / 2
 		}},
 		{"listing", func() { m.state, m.url = stateListing, longURL }},
-		{"picker", func() {
-			m.state, m.errMsg = statePicker, "nothing selected"
-			m.picker = newPicker(nodes)
-		}},
 		{"name", func() {
 			m.state, m.errMsg, m.nodes = stateName, longErr, nodes
 			m.nameInput.SetValue(strings.Repeat("name-", 12))
@@ -462,51 +454,10 @@ func TestAddlinkDialogStopsGrowingOnWideTerminal(t *testing.T) {
 
 	want := modalWidth + styleModal.GetHorizontalFrameSize()
 	for _, state := range addlinkStates(m) {
-		if state.name == "picker" {
-			continue // the file list is allowed the wider cap
-		}
 		state.setup()
 		if got := lipgloss.Width(m.view()); got > want {
 			t.Fatalf("state %s: dialog width = %d, want at most %d", state.name, got, want)
 		}
-	}
-}
-
-func TestAddlinkPickerFitsAboveVisibleNotice(t *testing.T) {
-	app, _ := openAddlinkTestApp(t)
-	app.width, app.height = 80, 24
-
-	nodes := []mega.Node{
-		{Path: "/Root", Name: "Root", Type: "folder", Handle: "root"},
-	}
-	for i := 0; i < 30; i++ {
-		name := fmt.Sprintf("episode-%02d.mkv", i)
-		nodes = append(nodes, mega.Node{
-			Path:   "/Root/" + name,
-			Name:   name,
-			Type:   "file",
-			Handle: fmt.Sprintf("file-%02d", i),
-			Parent: "root",
-			Size:   100,
-		})
-	}
-
-	m := newAddlinkModel(app)
-	m.state = statePicker
-	m.picker = newPicker(nodes)
-	app.addlink = m
-	app.downloads.setNotice("url copied")
-
-	view := app.View()
-	dialogHeight := lipgloss.Height(m.view())
-	if dialogHeight > app.bodyHeight {
-		t.Fatalf("dialog height = %d, want at most body height %d", dialogHeight, app.bodyHeight)
-	}
-	if m.modal.h != dialogHeight {
-		t.Fatalf("rendered modal height = %d, dialog height = %d; dialog was cropped", m.modal.h, dialogHeight)
-	}
-	if !strings.Contains(ansi.Strip(view), modalBorder.BottomLeft) {
-		t.Fatal("view is missing the picker dialog's bottom border")
 	}
 }
 

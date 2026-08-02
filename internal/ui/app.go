@@ -183,13 +183,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		msg.Y -= a.bodyTop
-		if a.rename != nil || a.del != nil {
-			return a, nil // a bare prompt has nothing to aim at
-		}
-		if a.addlink != nil {
-			model, cmd := a.addlink.update(msg)
-			a.addlink = model
-			return a, cmd
+		if a.addlink != nil || a.rename != nil || a.del != nil {
+			return a, nil // a dialog is all prompts, with nothing to aim at
 		}
 		return a, a.downloads.update(msg)
 	}
@@ -276,9 +271,7 @@ func (a *App) View() string {
 	switch {
 	case a.addlink != nil:
 		// add-link flow renders as a dialog centered over the downloads view
-		dialog := a.addlink.view()
-		a.addlink.modal = overlayRect(dialog, a.width, bodyHeight)
-		body = overlayCenter(body, dialog, a.width, bodyHeight)
+		body = overlayCenter(body, a.addlink.view(), a.width, bodyHeight)
 	case a.rename != nil:
 		body = overlayCenter(body, a.rename.view(), a.width, bodyHeight)
 	case a.del != nil:
