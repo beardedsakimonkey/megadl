@@ -30,7 +30,7 @@ func TestProgressBarUsesGreenProgressStyle(t *testing.T) {
 	}
 }
 
-// A held queue's bar wears the same orange as its marker and its file rows,
+// A held queue's bar wears the same yellow as its marker and its file rows,
 // track included: only the fill changes color, so the bar stays one strip.
 func TestPausedProgressBarUsesOrangeFill(t *testing.T) {
 	got := progressBar(4, 0.5, true)
@@ -393,7 +393,7 @@ func TestPausedFileRowUsesOrangeHeavyProgressBar(t *testing.T) {
 	got := m.fileRowView(f, &db.Download{ID: 7}, engine.Snapshot{Paused: true}, f.ID, false, 0, 60, 5)
 	want := styleWarn.Render("━━━━━") + styleDim.Render("─────")
 	if !strings.Contains(got, want) {
-		t.Fatalf("paused file row = %q, want orange heavy progress bar %q", got, want)
+		t.Fatalf("paused file row = %q, want yellow heavy progress bar %q", got, want)
 	}
 	if !strings.Contains(got, styleActivePercent.Render(" 50%")) {
 		t.Fatalf("paused file row = %q, want active percentage styling", got)

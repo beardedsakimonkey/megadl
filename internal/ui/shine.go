@@ -1,13 +1,14 @@
 package ui
 
 import (
-	"fmt"
 	"math"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/lucasb-eyer/go-colorful"
+	"github.com/muesli/termenv"
 
 	"megadl/internal/engine"
 )
@@ -39,25 +40,47 @@ const (
 	shineFrame = 50 * time.Millisecond
 )
 
-// The sweep is the one place the UI works in RGB instead of terminal colors: a
-// gradient is the steps between two colors, and the 256-color palette holds
-// almost nothing between the bar's green and a bright one — walking the few
-// entries it does have is exactly the banding the ramp exists to avoid.
+// The sweep is the one place the UI works in RGB instead of the terminal's own
+// colors: a gradient is the steps between two colors, and the palette holds
+// exactly one green to step through.
 //
 // A palette's base is the color of an unlit cell, matched to the terminal color
 // the plain bar fills with so a bar reads the same whether or not the sweep is
 // drawing it, and its peak is what a band's center reaches.
-type shinePalette struct{ base, peak [3]float64 }
+type shinePalette struct{ base, peak colorful.Color }
 
-// shineRunning is ANSI 42, styleProgress's green; shineHeld is ANSI 214, the
-// orange styleWarn marks a held queue with everywhere else it appears.
+// shineRunning is styleProgress's green, shineHeld the yellow styleWarn marks a
+// held queue with everywhere else it appears. Both have to keep step with those
+// styles, which is what TestShinePaletteMatchesTheBarsItStandsIn checks.
 var (
-	shineRunning = shinePalette{base: [3]float64{0, 215, 135}, peak: [3]float64{125, 240, 194}}
-	shineHeld    = shinePalette{base: [3]float64{255, 175, 0}, peak: [3]float64{255, 216, 140}}
+	shineRunning = shinePaletteOf(termenv.ANSIGreen)
+	shineHeld    = shinePaletteOf(termenv.ANSIYellow)
 )
 
+// shineLift is what a band's center gains in lightness over the flat bar, in
+// CIELUV: enough to read as light falling across the strip, short of arriving
+// somewhere the eye would call a second color.
+const shineLift = 0.22
+
+// shinePaletteOf ramps a palette slot to a lighter version of itself, so a band
+// is the bar's own color catching light rather than another color laid over it.
+//
+// The RGB it lifts is the standard value for the slot rather than the one the
+// terminal actually draws with: a terminal will answer for its background, but
+// nothing asks it what it has put in slot 2. A retinted scheme therefore sees
+// the sweep run a shade off its own green — the alternative, with one green to
+// work with, is no sweep at all.
+func shinePaletteOf(slot termenv.ANSIColor) shinePalette {
+	base := termenv.ConvertToRGB(slot)
+	l, c, h := base.LuvLCh()
+	return shinePalette{
+		base: base,
+		peak: colorful.LuvLCh(min(1, l+shineLift), c, h).Clamped(),
+	}
+}
+
 // shinePaletteFor picks the colors a bar is drawn in: held queues wear the
-// orange their marker and their file rows already do, so the strip says it is
+// yellow their marker and their file rows already do, so the strip says it is
 // stopped in color as well as in a sweep that has come to rest.
 func shinePaletteFor(paused bool) shinePalette {
 	if paused {
@@ -133,17 +156,17 @@ func shineIntensity(x float64) float64 {
 }
 
 // shineColor is the color the bar takes at position x cells along it, the
-// pattern having travelled offset.
+// pattern having travelled offset. Base and peak differ only in lightness, so
+// blending them in CIELUV walks that one axis: the ramp is even to the eye
+// rather than to the arithmetic, which is what keeps a band's falloff from
+// pooling at either end.
 func shineColor(x, offset float64, pal shinePalette) lipgloss.Color {
 	t := shineIntensity(x + offset)
-	mix := func(i int) int {
-		return int(math.Round(pal.base[i] + (pal.peak[i]-pal.base[i])*t))
-	}
-	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", mix(0), mix(1), mix(2)))
+	return lipgloss.Color(pal.base.BlendLuv(pal.peak, t).Clamped().Hex())
 }
 
 // shineProgressBar draws the statusbar's bar with the sweep running over its
-// filled cells, in green while the transfer runs and in orange while its queue
+// filled cells, in green while the transfer runs and in yellow while its queue
 // is held. Geometry is the plain bar's, down to the eighths of the leading
 // cell, so the sweep starting or stopping never moves the boundary.
 //

@@ -182,7 +182,7 @@ func (m *addlinkModel) urlInputView() string {
 	return view
 }
 
-// refreshLinkHint colors the input orange only while it holds a mega link.
+// refreshLinkHint colors the input yellow only while it holds a mega link.
 // Encoded links remain actionable, but are left in the terminal's text color
 // until the decoded link replaces them.
 func (m *addlinkModel) refreshLinkHint() {

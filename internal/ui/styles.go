@@ -12,15 +12,41 @@ import (
 	"github.com/muesli/termenv"
 )
 
+// The app takes its colors from the terminal's own 16-color palette rather than
+// naming shades out of the 256-color cube: green is then whatever green the
+// user's colorscheme already draws with, and the markers sit beside their shell
+// and their editor as part of the same family. A hand-picked palette can only
+// ever agree with the themes it was picked against; every other one it fights.
+//
+// Only the base eight slots are used. The bright eight are nominally the same
+// hues lifted, but a scheme is free to spend them however it likes — Solarized
+// hands four of them to greys — so slot 10 is not dependably green at all.
 const (
-	colorPrimary = lipgloss.Color("#FF3B30")
-	colorOrange  = lipgloss.Color("214")
+	colorRed    = lipgloss.Color("1")
+	colorGreen  = lipgloss.Color("2")
+	colorYellow = lipgloss.Color("3")
+	colorCyan   = lipgloss.Color("6")
+	// Slot 8 is the one muted color the schemes agree on: the grey a dark theme
+	// writes its comments in, and still dark enough on a light theme to read as
+	// text. Slot 0 is no substitute — that is the terminal's black, which on a
+	// light background is body text rather than a quieter version of it.
+	colorGrey = lipgloss.Color("8")
+
+	// colorPrimary is the accent: the cursor bar, the modal frames, the filter's
+	// marks. It is the terminal's red rather than MEGA's own #FF3B30, since an
+	// app that borrows the palette's most emphatic color has no business also
+	// bringing one of its own.
+	colorPrimary = colorRed
 )
 
 // colorTrack is the unfilled remainder of any bar drawn as a solid block — the
 // sparkline's track and the statusbar's progress bar. Like the cursor tint it
 // is a surface sitting just off the terminal's own background, so DetectTheme
 // derives it the same way and this pair is only the fallback.
+//
+// The two surfaces are the one thing not taken from the 16 colors: a surface has
+// to sit *just* off the background, and the palette's nearest offer is a grey
+// loud enough to read as a block of color laid over the screen.
 var colorTrack lipgloss.TerminalColor = lipgloss.AdaptiveColor{Light: "252", Dark: "237"}
 
 var (
@@ -36,28 +62,36 @@ var (
 	styleRowTint = lipgloss.NewStyle().Background(
 		lipgloss.AdaptiveColor{Light: "254", Dark: "237"})
 
-	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	styleError   = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	styleOK      = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	styleWarn    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	styleQueued  = lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
-	stylePartial = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	styleDim    = lipgloss.NewStyle().Foreground(colorGrey)
+	styleError  = lipgloss.NewStyle().Foreground(colorRed)
+	styleOK     = lipgloss.NewStyle().Foreground(colorGreen)
+	styleWarn   = lipgloss.NewStyle().Foreground(colorYellow)
+	styleQueued = lipgloss.NewStyle().Foreground(colorCyan)
+	// stylePartial shares the warning yellow: a file with bytes on disk and a
+	// queue that has been held are both unfinished business, and the markers
+	// that carry the two colors are different glyphs anyway.
+	stylePartial = lipgloss.NewStyle().Foreground(colorYellow)
 	styleAccent  = lipgloss.NewStyle().Foreground(colorPrimary)
 	// styleMatch marks the part of a name the filter query matched. It only
 	// recolors the letters, leaving the row's own background — the cursor tint
 	// included — to show through. The accent is the prompt's own, so the query
 	// and its marks are visibly the same thing.
 	styleMatch       = lipgloss.NewStyle().Foreground(colorPrimary)
-	styleNotice      = lipgloss.NewStyle().Foreground(colorOrange)
+	styleNotice      = lipgloss.NewStyle().Foreground(colorYellow)
 	stylePrimaryText = lipgloss.NewStyle().Foreground(colorPrimary)
-	styleProgress    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	styleDecode      = lipgloss.NewStyle().Foreground(colorOrange)
-	styleSpinner     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	styleHelpKey     = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
-	styleDirectory   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	styleTitle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
-	// Leave the foreground unset so the active file's percentage follows the
-	// terminal's own text color.
+	styleProgress    = lipgloss.NewStyle().Foreground(colorGreen)
+	styleDecode      = lipgloss.NewStyle().Foreground(colorYellow)
+	styleSpinner     = lipgloss.NewStyle().Foreground(colorGreen)
+	// A key is told from the label beside it by weight rather than by color:
+	// both are the palette's grey, so the footer stays a quiet strip and the
+	// bold is what picks the key out of it.
+	styleHelpKey   = lipgloss.NewStyle().Foreground(colorGrey).Bold(true)
+	styleDirectory = lipgloss.NewStyle().Foreground(colorGrey)
+	// Headings and the active file's percentage leave the foreground unset, so
+	// they follow the terminal's own text color and read as its brightest text.
+	// A fixed near-white would be text on a dark theme and nothing at all on a
+	// light one.
+	styleTitle         = lipgloss.NewStyle().Bold(true)
 	styleActivePercent = lipgloss.NewStyle().Bold(true)
 
 	// styleSparkTrack colors the sparkline's track. The track is a background,
@@ -126,15 +160,18 @@ func modalTopBorder(title string, width int) string {
 // quotaLimit is roughly what MEGA's free tier allows over the 6h window.
 const quotaLimit = 5 << 30
 
-// quotaStyle grades the 6h transfer total from green to red in four steps:
-// the bands are quarters of quotaLimit, and everything at or past it renders
-// in the same red as an error.
+// quotaStyle grades the 6h transfer total green, yellow, red as it fills: half
+// the allowance is where it stops being comfortable and three quarters is where
+// it starts reading as the error it is about to become.
+//
+// The ramp is three steps rather than four because green, yellow and red is the
+// whole of what the palette offers between fine and not. The step it gave up sat
+// between yellow and orange, which is the pair a reader was least likely to have
+// told apart anyway.
 func quotaStyle(bytes int64) lipgloss.Style {
 	switch {
-	case bytes < quotaLimit/4:
-		return styleOK
 	case bytes < quotaLimit/2:
-		return stylePartial
+		return styleOK
 	case bytes < quotaLimit*3/4:
 		return styleWarn
 	default:
@@ -145,15 +182,14 @@ func quotaStyle(bytes int64) lipgloss.Style {
 // rateBands are the download speeds the rate ramp steps at, fastest first,
 // paired with the style a rate at or above that speed renders in. The steps
 // are a factor of four apart rather than evenly spaced: transfer speed is read
-// by order of magnitude, so linear bands would spend three of the four colors
-// on the fast end and call everything ordinary red.
+// by order of magnitude, so linear bands would spend both of them on the fast
+// end and call everything ordinary red.
 var rateBands = []struct {
 	bps   float64
 	style lipgloss.Style
 }{
-	{4 << 20, styleOK},      // a link running at full tilt
-	{1 << 20, stylePartial}, // healthy
-	{256 << 10, styleWarn},  // slow, but still moving
+	{1 << 20, styleOK},     // a link doing what it should
+	{256 << 10, styleWarn}, // slow, but still moving
 }
 
 // rateStyle grades a transfer's speed green to red, the same ramp quotaStyle
@@ -491,7 +527,7 @@ func barCells(width int, frac float64) (filled, rem int) {
 }
 
 // progressBar renders a fixed-width bar for frac in [0,1], green while the
-// queue runs and orange while it is held — the same orange the pause marker and
+// queue runs and yellow while it is held — the same yellow the pause marker and
 // the file rows use, so the whole screen agrees at a glance. The leading cell is
 // drawn at eighth-of-a-cell resolution so a transfer that has just started
 // reads as moving rather than sitting empty until it has earned a whole cell.

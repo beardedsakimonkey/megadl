@@ -42,7 +42,7 @@ func TestShortcutStylesFilterKeyAsBoldAndColored(t *testing.T) {
 	}
 }
 
-func TestPrimaryStylesUseMegaRed(t *testing.T) {
+func TestPrimaryStylesUseTheTerminalsRed(t *testing.T) {
 	if got := styleAccent.GetForeground(); got != colorPrimary {
 		t.Fatalf("accent foreground = %v, want %v", got, colorPrimary)
 	}
@@ -194,9 +194,8 @@ func TestRateStyleGradesSpeedFromFastToSlow(t *testing.T) {
 		name string
 	}{
 		{9 << 20, styleOK, "fast"},
-		{4 << 20, styleOK, "at the green threshold"},
-		{(4 << 20) - 1, stylePartial, "just under it"},
-		{2 << 20, stylePartial, "healthy"},
+		{1 << 20, styleOK, "at the green threshold"},
+		{(1 << 20) - 1, styleWarn, "just under it"},
 		{512 << 10, styleWarn, "slow"},
 		{64 << 10, styleError, "crawling"},
 		{0, styleError, "stalled"},
@@ -381,9 +380,9 @@ func TestStatusbarMarksHeldQueueHead(t *testing.T) {
 	}
 	pausedRate := fmt.Sprintf("%*s", len("1023.9 KiB/s"), "PAUSED")
 	if !strings.Contains(got, styleWarn.Render(pausedRate)) {
-		t.Fatalf("statusbar = %q, want orange state %q", got, styleWarn.Render(pausedRate))
+		t.Fatalf("statusbar = %q, want yellow state %q", got, styleWarn.Render(pausedRate))
 	}
-	// The bar turns the same orange as the marker, lit by bands that have
+	// The bar turns the same yellow as the marker, lit by bands that have
 	// stopped where they stood rather than blinking out.
 	wantBar := shineProgressBar(20, 0.4, 0, true)
 	if !strings.Contains(got, wantBar) {
@@ -676,8 +675,8 @@ func TestPasteOpensAddlinkDialogPrefilled(t *testing.T) {
 	if got := app.addlink.urlInput.Value(); got != link {
 		t.Fatalf("url input = %q, want %q", got, link)
 	}
-	if got := app.addlink.urlInput.TextStyle.GetForeground(); got != colorOrange {
-		t.Fatalf("link hint = %v, want %v", got, colorOrange)
+	if got := app.addlink.urlInput.TextStyle.GetForeground(); got != colorYellow {
+		t.Fatalf("link hint = %v, want %v", got, colorYellow)
 	}
 
 	// a paste is never a shortcut, even when it is a single "q"

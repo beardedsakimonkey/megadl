@@ -330,8 +330,8 @@ func TestAddlinkDecodesBase64LinkAndAnimatesReveal(t *testing.T) {
 	if m.state != stateURL || m.urlInput.Value() != link {
 		t.Fatalf("after animation: state=%v input=%q", m.state, m.urlInput.Value())
 	}
-	if got := m.urlInput.TextStyle.GetForeground(); got != colorOrange {
-		t.Fatalf("decoded link should stay orange, got %v", got)
+	if got := m.urlInput.TextStyle.GetForeground(); got != colorYellow {
+		t.Fatalf("decoded link should stay yellow, got %v", got)
 	}
 
 	// stale frames from the finished animation are ignored
@@ -372,14 +372,14 @@ func TestAddlinkColorsOnlyMegaLinkInputOrange(t *testing.T) {
 
 	m := newAddlinkModel(app)
 	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(encoded)})
-	if got := m.urlInput.TextStyle.GetForeground(); got == colorOrange {
+	if got := m.urlInput.TextStyle.GetForeground(); got == colorYellow {
 		t.Fatalf("foreground after base64 paste = %v, want default", got)
 	}
 
 	m = newAddlinkModel(app)
 	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(link)})
-	if got := m.urlInput.TextStyle.GetForeground(); got != colorOrange {
-		t.Fatalf("foreground after link paste = %v, want %v", got, colorOrange)
+	if got := m.urlInput.TextStyle.GetForeground(); got != colorYellow {
+		t.Fatalf("foreground after link paste = %v, want %v", got, colorYellow)
 	}
 }
 

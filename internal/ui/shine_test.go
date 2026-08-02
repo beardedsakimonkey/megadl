@@ -1,9 +1,15 @@
 package ui
 
 import (
+	"fmt"
 	"math"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/lucasb-eyer/go-colorful"
+	"github.com/muesli/termenv"
 
 	"megadl/internal/engine"
 )
@@ -151,26 +157,48 @@ func TestSweepRunsOnlyWhileFetching(t *testing.T) {
 	}
 }
 
-// A held queue's bar is orange and a running one's green, both ramping to a
-// lighter version of themselves at a band's center. The unlit ends are the RGB
-// of the terminal colors the plain bars fill with — ANSI 42 and ANSI 214 — so a
-// bar looks the same whether the sweep or the fallback drew it.
+// A held queue's bar is yellow and a running one's green, both ramping to a
+// lighter version of themselves at a band's center. The unlit end is pinned to
+// the palette slot the plain bar fills with rather than to a hex written out
+// here: that is the coupling the sweep rests on, so recoloring a bar and
+// forgetting its palette has to fail.
 func TestShinePaletteMatchesTheBarsItStandsIn(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		paused     bool
-		base, peak string
+		name   string
+		paused bool
+		style  lipgloss.Style
 	}{
-		{"running", false, "#00D787", "#7DF0C2"},
-		{"held", true, "#FFAF00", "#FFD88C"},
+		{"running", false, styleProgress},
+		{"held", true, styleWarn},
 	} {
-		pal := shinePaletteFor(tc.paused)
-		// Half a band along, the light has fallen off entirely.
-		if got := shineColor(shineSpacing/2, 0, pal); string(got) != tc.base {
-			t.Fatalf("%s bar between bands = %v, want the flat %v", tc.name, got, tc.base)
+		slot, err := strconv.Atoi(fmt.Sprint(tc.style.GetForeground()))
+		if err != nil {
+			t.Fatalf("%s bar is filled with %v, want a palette slot the sweep can "+
+				"take its ramp from", tc.name, tc.style.GetForeground())
 		}
-		if got := shineColor(0, 0, pal); string(got) != tc.peak {
-			t.Fatalf("%s bar at a band's center = %v, want %v", tc.name, got, tc.peak)
+		flat := termenv.ConvertToRGB(termenv.ANSIColor(slot))
+		pal := shinePaletteFor(tc.paused)
+
+		// Half a band along, the light has fallen off entirely.
+		if got := shineColor(shineSpacing/2, 0, pal); string(got) != flat.Hex() {
+			t.Fatalf("%s bar between bands = %v, want the flat %v", tc.name, got, flat.Hex())
+		}
+
+		// At a band's center it is the same color with light on it: brighter,
+		// and still the hue the rest of the app calls green or yellow.
+		lit, err := colorful.Hex(string(shineColor(0, 0, pal)))
+		if err != nil {
+			t.Fatalf("%s band center is not a color: %v", tc.name, err)
+		}
+		flatL, _, flatH := flat.LuvLCh()
+		litL, _, litH := lit.LuvLCh()
+		if litL <= flatL {
+			t.Fatalf("%s band center lightness = %.3f, want more than the flat %.3f",
+				tc.name, litL, flatL)
+		}
+		if math.Abs(litH-flatH) > 1 {
+			t.Fatalf("%s band center hue = %.1f°, want the flat bar's %.1f°",
+				tc.name, litH, flatH)
 		}
 	}
 }
