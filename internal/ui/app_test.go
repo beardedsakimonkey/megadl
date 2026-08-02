@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/lucasb-eyer/go-colorful"
 
 	"megadl/internal/db"
 	"megadl/internal/engine"
@@ -97,6 +99,60 @@ func TestArmBackgroundReopensAfterNestedResets(t *testing.T) {
 	want := open + "  <fg>✓" + reset + open + " name" + reset
 	if got != want {
 		t.Fatalf("armBackground() = %q, want %q", got, want)
+	}
+}
+
+// The app's surfaces are shades of the terminal's own background, so they have
+// to move the right way whichever colorscheme they land in: lighter under a
+// dark theme, darker under a light one, and in the background's own hue either
+// way.
+func TestShadeOffStepsAwayFromTheBackground(t *testing.T) {
+	lightness := func(hex string) float64 {
+		c, err := colorful.Hex(hex)
+		if err != nil {
+			t.Fatalf("colorful.Hex(%q): %v", hex, err)
+		}
+		_, _, l := c.Hsl()
+		return l
+	}
+	for _, bg := range []string{"#000000", "#1e1e2e", "#282828"} {
+		if got, want := lightness(shadeOff(bg, 0.1, 0.06)), lightness(bg); got <= want {
+			t.Fatalf("shadeOff(%s) lightness = %.3f, want above %.3f", bg, got, want)
+		}
+	}
+	for _, bg := range []string{"#ffffff", "#fdf6e3", "#eeeeee"} {
+		if got, want := lightness(shadeOff(bg, 0.1, 0.06)), lightness(bg); got >= want {
+			t.Fatalf("shadeOff(%s) lightness = %.3f, want below %.3f", bg, got, want)
+		}
+	}
+
+	// A colored background shades in its own color rather than toward gray: a
+	// blue theme's band is blue, a cream one's is cream.
+	for _, bg := range []string{"#002b36", "#fdf6e3", "#300a24"} {
+		base, _ := colorful.Hex(bg)
+		shade, err := colorful.Hex(shadeOff(bg, 0.1, 0.06))
+		if err != nil {
+			t.Fatalf("shadeOff(%s) is not a color: %v", bg, err)
+		}
+		wantHue, _, _ := base.Hsl()
+		gotHue, _, _ := shade.Hsl()
+		if math.Abs(gotHue-wantHue) > 10 {
+			t.Fatalf("shadeOff(%s) hue = %.1f, want near %.1f", bg, gotHue, wantHue)
+		}
+	}
+}
+
+// A bar's track has glyphs standing on it, so it sits further off the
+// background than the cursor band, which only has to be felt under a row.
+func TestTrackSitsFurtherOffTheBackgroundThanTheCursorBand(t *testing.T) {
+	for _, bg := range []string{"#000000", "#1e1e2e", "#2e3440", "#ffffff", "#fdf6e3"} {
+		base, _ := colorful.Hex(bg)
+		band, _ := colorful.Hex(shadeOff(bg, tintDeltaDark, tintDeltaLight))
+		track, _ := colorful.Hex(shadeOff(bg, trackDeltaDark, trackDeltaLight))
+		if base.DistanceLab(track) <= base.DistanceLab(band) {
+			t.Fatalf("on %s the track (%v) is no further off than the band (%v)",
+				bg, track.Hex(), band.Hex())
+		}
 	}
 }
 

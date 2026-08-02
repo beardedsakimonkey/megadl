@@ -8,23 +8,33 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/lucasb-eyer/go-colorful"
+	"github.com/muesli/termenv"
 )
 
 const (
 	colorPrimary = lipgloss.Color("#FF3B30")
 	colorOrange  = lipgloss.Color("214")
-	// colorTrack is the unfilled remainder of any bar drawn as a solid
-	// block — the sparkline's track and the statusbar's progress bar.
-	colorTrack = lipgloss.Color("237")
 )
+
+// colorTrack is the unfilled remainder of any bar drawn as a solid block — the
+// sparkline's track and the statusbar's progress bar. Like the cursor tint it
+// is a surface sitting just off the terminal's own background, so DetectTheme
+// derives it the same way and this pair is only the fallback.
+var colorTrack lipgloss.TerminalColor = lipgloss.AdaptiveColor{Light: "252", Dark: "237"}
 
 var (
 	// styleCursor draws the gutter bar on the cursor row of the focused pane,
 	// and styleRowTint the faint band behind that row. Between them they mark
 	// the cursor without setting a foreground: a bright full-row highlight
 	// would flatten the very row being read.
+	//
+	// The tint's pair here is only the fallback. DetectTheme replaces it with a
+	// shade derived from the terminal's own background whenever the terminal is
+	// willing to say what that background is.
 	styleCursor  = lipgloss.NewStyle().Foreground(colorPrimary)
-	styleRowTint = lipgloss.NewStyle().Background(lipgloss.Color("237"))
+	styleRowTint = lipgloss.NewStyle().Background(
+		lipgloss.AdaptiveColor{Light: "254", Dark: "237"})
 
 	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	styleError   = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
@@ -214,6 +224,87 @@ func cursorBar(selected, focused bool, level int) string {
 		style = styleCursor
 	}
 	return style.Render(cursorLevels[level-1]) + " "
+}
+
+// The steps the app's two surfaces take off the terminal's own background, in
+// perceived lightness. A dark background takes the bigger step either way: the
+// same difference reads as less against near-black than it does against a
+// bright surface, where the eye picks up a much smaller shift.
+//
+// A bar's track steps further than the cursor band does, because the two are
+// asked for different things. The band sits under a row being read and only has
+// to be felt; the track is a surface with glyphs standing on it, and a track
+// too close to the background stops reading as one — which is the whole reason
+// the bars are drawn against it.
+const (
+	tintDeltaDark   = 0.10
+	tintDeltaLight  = 0.06
+	trackDeltaDark  = 0.16
+	trackDeltaLight = 0.10
+)
+
+// DetectTheme asks the terminal what its background color is and derives the
+// app's surfaces from it — the cursor band and the bar track — so both are
+// shades of whatever colorscheme is in use rather than fixed grays that only
+// ever suit dark themes.
+//
+// The answer comes back over the tty, so this has to run before Bubble Tea
+// takes the input over. It settles lipgloss's own light/dark question from the
+// same answer, which would otherwise ask the terminal again from inside the
+// render loop, with Bubble Tea already holding the input.
+//
+// A terminal only answers if it wants to: multiplexers refuse outright, and a
+// pipe has nobody to ask. Anything short of a real color leaves the fallback
+// pairs in place rather than shading from a background we guessed at — a
+// surface derived from an assumed black would come out darker than the real
+// background and read as a hole punched in the screen.
+func DetectTheme() {
+	bg := lipgloss.DefaultRenderer().Output().BackgroundColor()
+	_, _, l := termenv.ConvertToRGB(bg).Hsl()
+	lipgloss.SetHasDarkBackground(l < 0.5)
+
+	rgb, ok := bg.(termenv.RGBColor)
+	if !ok {
+		return
+	}
+	// Below ANSI256 the nearest available color to a small nudge off the
+	// background is the background itself, and a surface nobody can see is
+	// worse than a fixed one that is a little off-theme.
+	if p := lipgloss.ColorProfile(); p != termenv.TrueColor && p != termenv.ANSI256 {
+		return
+	}
+	hex := string(rgb)
+	styleRowTint = styleRowTint.Background(
+		lipgloss.Color(shadeOff(hex, tintDeltaDark, tintDeltaLight)))
+
+	colorTrack = lipgloss.Color(shadeOff(hex, trackDeltaDark, trackDeltaLight))
+	// Both track styles took a copy of the fallback when the package loaded;
+	// everywhere else reads colorTrack at render time and needs no help.
+	styleSparkTrack = styleSparkTrack.Background(colorTrack)
+	styleProgressTrack = styleProgressTrack.Foreground(colorTrack)
+}
+
+// shadeOff steps hex one shade off its own lightness: up by dark from a dark
+// background, down by light from a light one.
+//
+// The step is taken in CIELUV, moving lightness while hue and chroma stay put,
+// so the shade is the background's own color at a different brightness. Doing
+// this in plain HSL instead would hold saturation as a fraction of what the new
+// lightness allows, which quietly repaints a cream background yellow on the way
+// down. The two ends of the range need clamping back into gamut: not every
+// lightness exists at every chroma.
+func shadeOff(hex string, dark, light float64) string {
+	c, err := colorful.Hex(hex)
+	if err != nil {
+		return hex
+	}
+	l, chroma, hue := c.LuvLCh()
+	if l < 0.5 {
+		l = min(1, l+dark)
+	} else {
+		l = max(0, l-light)
+	}
+	return colorful.LuvLCh(l, chroma, hue).Clamped().Hex()
 }
 
 // tintRow lays styleRowTint's background under a line that is already styled,

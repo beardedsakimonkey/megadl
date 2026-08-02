@@ -44,6 +44,9 @@ func run() error {
 	go eng.Run(ctx)
 	eng.Kick() // pick up queued downloads from a previous session
 
+	// Read the terminal's colors while stdin is still ours to ask on.
+	ui.DetectTheme()
+
 	app := ui.NewApp(cfg, database, eng, drv)
 	program := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = program.Run()
