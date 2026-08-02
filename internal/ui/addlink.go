@@ -21,12 +21,14 @@ import (
 
 type addlinkState int
 
+// The flow never leaves the dialog it opened on: every state is a line on the
+// same frame, so a listing, a failure, or a name to settle changes what the
+// prompt says rather than replacing it with a differently sized box.
 const (
 	stateURL addlinkState = iota
 	stateDecoding
 	stateListing
 	stateName
-	stateFailed
 )
 
 const (
@@ -86,7 +88,11 @@ func newAddlinkModel(app *App) *addlinkModel {
 	url.Focus()
 	url.Width = max(8, w-promptWidth(url)-1)
 
+	// The name prompt sits under the link's on the same dialog, so it is
+	// labelled rather than left as a second anonymous "> ".
 	name := textinput.New()
+	name.Prompt = "name "
+	name.PromptStyle = styleDim
 	name.Width = max(8, w-promptWidth(name)-1)
 
 	sp := spinner.New(
@@ -155,16 +161,16 @@ func (m *addlinkModel) nextURL() {
 	m.refreshLinkHint()
 }
 
-// urlInputView pads the input line to its filled-in width: bubbles renders
-// the placeholder Width cells wide but a value prompt+Width+1, so the dialog
-// would otherwise widen the moment the input gets content.
-func (m *addlinkModel) urlInputView() string {
-	view := m.urlInput.View()
-	w := promptWidth(m.urlInput) + m.urlInput.Width + 1
-	if pad := w - lipgloss.Width(view); pad > 0 {
-		view += strings.Repeat(" ", pad)
-	}
-	return view
+// urlListingView is the URL line the user submitted, with the spinner standing
+// in for the prompt: the listing is fetched on the dialog the link was typed
+// into, so the line keeps its contents and the frame its size while it runs.
+func (m *addlinkModel) urlListingView() string {
+	in := m.urlInput
+	prompt := fitCells(m.spin.View(), promptWidth(in))
+	in.Prompt, in.PromptStyle = prompt, lipgloss.NewStyle()
+	// nothing is editable until the listing lands, so the cursor goes away
+	in.Blur()
+	return inputLineView(in)
 }
 
 // refreshLinkHint colors the input yellow only while it holds a mega link.
@@ -231,6 +237,15 @@ func (m *addlinkModel) submitURL(url string) (*addlinkModel, tea.Cmd) {
 	return m, tea.Batch(m.spin.Tick, m.listCmd(url))
 }
 
+// failListing hands the link back to the URL prompt with reason under it. The
+// link stays in the input because editing it is what there is to do next, and
+// typing clears the message like it does for any other bad input.
+func (m *addlinkModel) failListing(reason string) (*addlinkModel, tea.Cmd) {
+	m.state = stateURL
+	m.errMsg = reason
+	return m, textinput.Blink
+}
+
 func (m *addlinkModel) listCmd(url string) tea.Cmd {
 	drv := m.app.drv
 	return func() tea.Msg {
@@ -248,24 +263,19 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 		if msg.url != m.url || m.state != stateListing {
 			return m, nil
 		}
+		// A listing that doesn't produce something to enqueue hands the link
+		// back to the prompt it came from, with the reason under it: a failure
+		// is another thing to fix about the link, like any other bad input.
 		if msg.err != nil {
-			m.state = stateFailed
-			m.errMsg = msg.err.Error()
-			return m, nil
+			return m.failListing(msg.err.Error())
 		}
 		m.nodes = msg.nodes
 		existing, err := m.app.db.FindByResource(m.linkType, msg.nodes[0].Handle)
 		if err != nil {
-			m.state = stateFailed
-			m.errMsg = "check library: " + err.Error()
-			return m, nil
+			return m.failListing("check library: " + err.Error())
 		}
 		if existing != nil {
-			// the link resolves to something the library already has, so the
-			// prompt keeps the link and says so, like any other bad input
-			m.state = stateURL
-			m.errMsg = fmt.Sprintf("already in the library as %q", existing.Name)
-			return m, textinput.Blink
+			return m.failListing(fmt.Sprintf("already in the library as %q", existing.Name))
 		}
 		return m.submit()
 
@@ -280,6 +290,11 @@ func (m *addlinkModel) update(msg tea.Msg) (*addlinkModel, tea.Cmd) {
 		return m, m.decodeTickCmd()
 
 	case spinner.TickMsg:
+		// the loop ends with the listing that started it, so a dialog sitting
+		// on a prompt isn't redrawing itself ten times a second
+		if m.state != stateListing {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
@@ -360,19 +375,13 @@ func (m *addlinkModel) updateKey(key tea.KeyMsg) (*addlinkModel, tea.Cmd) {
 			}
 			return nil, nil
 		}
+		before := m.nameInput.Value()
 		var cmd tea.Cmd
 		m.nameInput, cmd = m.nameInput.Update(key)
-		return m, cmd
-
-	case stateFailed:
-		switch key.String() {
-		case "esc", "q":
-			return nil, nil
-		default:
-			m.state = stateURL
+		if m.nameInput.Value() != before {
 			m.errMsg = ""
-			return m, textinput.Blink
 		}
+		return m, cmd
 	}
 	return m, nil
 }
@@ -391,6 +400,10 @@ func (m *addlinkModel) submit() (*addlinkModel, tea.Cmd) {
 			return nil, nil
 		}
 		m.errMsg = err.Error()
+	} else {
+		// the dialog keeps one title throughout, so the reason it is asking
+		// goes where every other thing to fix about the input goes
+		m.errMsg = fmt.Sprintf("%q is already taken", name)
 	}
 	return m, m.promptName(unique)
 }
@@ -517,12 +530,6 @@ func listingFiles(destPath string, nodes []mega.Node) []db.File {
 
 func (m *addlinkModel) help() string {
 	switch m.state {
-	case stateURL:
-		return renderShortcuts(
-			shortcut{keys: []string{"↑/↓", "ctrl+p/n"}, label: "history"},
-			shortcut{keys: []string{"enter"}, label: "submit"},
-			shortcut{keys: []string{"esc"}, label: "cancel"},
-		)
 	case stateDecoding:
 		return renderShortcuts(
 			shortcut{keys: []string{"enter"}, label: "submit"},
@@ -536,46 +543,47 @@ func (m *addlinkModel) help() string {
 			shortcut{keys: []string{"esc"}, label: "cancel"},
 		)
 	}
-	return renderShortcuts(shortcut{keys: []string{"esc"}, label: "close"})
+	return renderShortcuts(
+		shortcut{keys: []string{"↑/↓", "ctrl+p/n"}, label: "history"},
+		shortcut{keys: []string{"enter"}, label: "submit"},
+		shortcut{keys: []string{"esc"}, label: "cancel"},
+	)
 }
 
+// view is one dialog for the whole flow: the link is always the first line,
+// the name prompt is a block below it, and whatever is wrong sits at the
+// bottom. States change lines, never the frame or its heading.
 func (m *addlinkModel) view() string {
 	w := m.width
-	var title, body string
-	switch m.state {
-	case stateURL:
-		title, body = "Add mega.nz link", m.urlInputView()
-		if m.errMsg != "" {
-			body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
-		}
-	case stateDecoding:
-		// the animation stands in for the input's value: same title and
-		// prompt, padded to the input's rendered width so nothing shifts
-		prompt := m.urlInput.PromptStyle.Render(m.urlInput.Prompt)
-		width := m.urlInput.Width + 1
-		frame := m.decodeFrameView(width)
-		title = "Add mega.nz link"
-		body = prompt + lipgloss.NewStyle().Width(width).Render(frame)
-	case stateListing:
-		title = "Add mega.nz link"
-		body = m.spin.View() + " fetching listing…\n" +
-			styleDim.Render(truncateMiddle(m.url, w))
-	case stateName:
+	body := m.urlLineView()
+	if m.state == stateName {
 		count, bytes := m.totals()
 		summary := fmt.Sprintf("%d file(s), %s → ", count, humanBytes(bytes))
-		title = "Name already taken"
-		body = m.nameInput.View() + "\n\n" +
+		body += "\n\n" + inputLineView(m.nameInput) + "\n" +
 			styleDim.Render(summary+truncateMiddle(m.app.cfg.DownloadDir,
 				max(8, w-lipgloss.Width(summary)-1))+"/")
-		if m.errMsg != "" {
-			body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
-		}
-	case stateFailed:
-		title = "Listing failed"
-		body = styleError.Render(wrap(m.errMsg, w)) + "\n\n" +
-			styleDim.Render(wrap("press any key to edit the link, esc to close", w))
 	}
-	return renderModal(title, body)
+	if m.errMsg != "" {
+		body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
+	}
+	return renderModal("Add mega.nz link", body)
+}
+
+// urlLineView is the link the flow is working on: a prompt to type in, the
+// decode animation, or the listing spinner. All three are the same line at the
+// same width, so the dialog holds still as the flow moves through them.
+func (m *addlinkModel) urlLineView() string {
+	switch m.state {
+	case stateDecoding:
+		// the animation stands in for the input's value: same prompt, padded
+		// to the input's rendered width so nothing shifts
+		prompt := m.urlInput.PromptStyle.Render(m.urlInput.Prompt)
+		width := m.urlInput.Width + 1
+		return prompt + lipgloss.NewStyle().Width(width).Render(m.decodeFrameView(width))
+	case stateListing:
+		return m.urlListingView()
+	}
+	return inputLineView(m.urlInput)
 }
 
 func (m *addlinkModel) decodeFrameView(width int) string {

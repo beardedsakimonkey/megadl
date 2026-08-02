@@ -168,13 +168,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.downloads.cursorTick()
 
 	case spinner.TickMsg:
-		if !a.downloading() {
-			a.spinning = false
-			return a, nil
+		// The statusbar and the add-link dialog spin independently, and a
+		// spinner drops ticks that aren't its own, so both have to see the
+		// message: routing it to one of them would strand the other's loop.
+		var cmds []tea.Cmd
+		if a.addlink != nil {
+			model, cmd := a.addlink.update(msg)
+			a.addlink = model
+			cmds = append(cmds, cmd)
 		}
-		var cmd tea.Cmd
-		a.spinner, cmd = a.spinner.Update(msg)
-		return a, cmd
+		if a.downloading() {
+			var cmd tea.Cmd
+			a.spinner, cmd = a.spinner.Update(msg)
+			cmds = append(cmds, cmd)
+		} else {
+			a.spinning = false
+		}
+		return a, tea.Batch(cmds...)
 
 	case tea.MouseMsg:
 		// header and footer are inert; everything else is addressed in

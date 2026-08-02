@@ -36,6 +36,18 @@ func promptWidth(in textinput.Model) int {
 	return lipgloss.Width(in.PromptStyle.Render(in.Prompt))
 }
 
+// inputLineView pads a text input to its filled-in width: bubbles renders the
+// placeholder Width cells wide but a value prompt+Width+1, so the dialog would
+// otherwise widen the moment the input gets content.
+func inputLineView(in textinput.Model) string {
+	view := in.View()
+	w := promptWidth(in) + in.Width + 1
+	if pad := w - lipgloss.Width(view); pad > 0 {
+		view += strings.Repeat(" ", pad)
+	}
+	return view
+}
+
 // rect is a region of the terminal grid.
 type rect struct{ x, y, w, h int }
 

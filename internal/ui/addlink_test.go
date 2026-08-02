@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/base64"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -430,7 +431,6 @@ func addlinkStates(m *addlinkModel) []struct {
 			m.nameInput.SetValue(strings.Repeat("name-", 12))
 			m.nameInput.CursorEnd()
 		}},
-		{"failed", func() { m.state, m.errMsg = stateFailed, longErr }},
 	}
 }
 
@@ -480,6 +480,96 @@ func TestAddlinkDecodeAnimationKeepsDialogWidthStable(t *testing.T) {
 		if got := lipgloss.Width(m.view()); got != want {
 			t.Fatalf("frame %d: dialog width = %d, want %d", m.decodeFrame, got, want)
 		}
+	}
+}
+
+// Listing runs on the URL dialog rather than replacing it, so submitting a
+// link may swap the prompt for a spinner but must not move or resize anything.
+func TestAddlinkListingKeepsDialogGeometryAndURL(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	app.width, app.height = 100, 30
+	link := "https://mega.nz/folder/EEEEEEEE#0123456789abcdefghijkl"
+
+	m := newAddlinkModel(app)
+	m.urlInput.SetValue(link)
+	m.urlInput.CursorEnd()
+	before := m.view()
+
+	m, _ = m.submitURL(link)
+	if m.state != stateListing {
+		t.Fatalf("after submit: state = %v, want stateListing", m.state)
+	}
+
+	got := m.view()
+	if lipgloss.Width(got) != lipgloss.Width(before) ||
+		strings.Count(got, "\n") != strings.Count(before, "\n") {
+		t.Fatalf("listing dialog %dx%d, want %dx%d",
+			lipgloss.Width(got), strings.Count(got, "\n")+1,
+			lipgloss.Width(before), strings.Count(before, "\n")+1)
+	}
+	if !strings.Contains(ansi.Strip(got), link) {
+		t.Fatalf("listing dialog dropped the link:\n%s", ansi.Strip(got))
+	}
+}
+
+// A failed listing is another thing to fix about the link, so it comes back to
+// the prompt the link was typed into rather than to a dialog of its own.
+func TestAddlinkListingFailureReturnsToPrompt(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	app.width, app.height = 100, 30
+	link := "https://mega.nz/folder/EEEEEEEE#0123456789abcdefghijkl"
+
+	m := newAddlinkModel(app)
+	m.urlInput.SetValue(link)
+	m.urlInput.CursorEnd()
+	before := m.view()
+
+	m, _ = m.submitURL(link)
+	m, _ = m.update(listResultMsg{url: link, err: errors.New("no such host")})
+
+	if m.state != stateURL {
+		t.Fatalf("after failure: state = %v, want stateURL", m.state)
+	}
+	if got := m.urlInput.Value(); got != link {
+		t.Fatalf("prompt holds %q, want the submitted link", got)
+	}
+	if lipgloss.Width(m.view()) != lipgloss.Width(before) {
+		t.Fatalf("failure widened the dialog to %d, want %d",
+			lipgloss.Width(m.view()), lipgloss.Width(before))
+	}
+	if !strings.Contains(ansi.Strip(m.view()), "no such host") {
+		t.Fatalf("failure went unreported:\n%s", ansi.Strip(m.view()))
+	}
+
+	// typing clears the message, as it does for any other bad input
+	m, _ = m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if m.errMsg != "" {
+		t.Fatalf("errMsg = %q after editing the link, want cleared", m.errMsg)
+	}
+}
+
+// The statusbar's spinner case in App.Update must not eat the dialog's ticks:
+// the prompt spinner is the only sign the listing is still running.
+func TestAddlinkSpinnerKeepsTickingWhileListing(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	app.width, app.height = 100, 30
+	app.addlink = newAddlinkModel(app)
+	m := app.addlink
+	m.url, m.linkType, m.state = "https://mega.nz/folder/FFFFFFFF#k", "folder", stateListing
+
+	before := m.spin.View()
+	_, cmd := app.Update(m.spin.Tick())
+	if cmd == nil {
+		t.Fatal("spinner tick was swallowed: no follow-up tick scheduled")
+	}
+	if m.spin.View() == before {
+		t.Fatalf("spinner frame stayed on %q", ansi.Strip(before))
+	}
+
+	// back on the prompt the animation has nothing left to report
+	m.state = stateURL
+	if _, cmd := app.Update(m.spin.Tick()); cmd != nil {
+		t.Fatal("spinner kept ticking after the listing finished")
 	}
 }
 

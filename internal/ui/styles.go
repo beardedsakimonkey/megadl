@@ -610,6 +610,16 @@ func truncate(s string, w int) string {
 	return string(r[:w-1]) + "…"
 }
 
+// fitCells crops or pads s to exactly w cells, styling and all, so one styled
+// run can stand in for another without moving what follows it.
+func fitCells(s string, w int) string {
+	s = ansi.Truncate(s, w, "")
+	if pad := w - lipgloss.Width(s); pad > 0 {
+		s += strings.Repeat(" ", pad)
+	}
+	return s
+}
+
 // wrap breaks s onto lines of at most w cells. Words longer than the line are
 // broken mid-word rather than allowed to run past it, which is what keeps a
 // URL or a bare error string from widening the modal it sits in.
