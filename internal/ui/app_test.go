@@ -165,7 +165,7 @@ func TestStatusbarShowsActiveFileProgress(t *testing.T) {
 		Rate:        2 << 20,
 	}
 
-	line := statusbarLine(snap, "⠋", 100, 0)
+	line := statusbarLine(snap, "⠋", 100)
 	got := ansi.Strip(line)
 	for _, want := range []string{
 		"⠋ episode-01.mkv",
@@ -217,7 +217,7 @@ func TestStatusbarBarStaysPutAcrossFilesAndNumberChanges(t *testing.T) {
 			FileDone:    done,
 			Rate:        rate,
 		}
-		return strings.IndexAny(ansi.Strip(statusbarLine(snap, "⠋", 100, 0)),
+		return strings.IndexAny(ansi.Strip(statusbarLine(snap, "⠋", 100)),
 			"█"+strings.Join(eighthBlocks[:], ""))
 	}
 
@@ -241,11 +241,11 @@ func TestStatusbarBarStaysPutAcrossFilesAndNumberChanges(t *testing.T) {
 }
 
 func TestStatusbarEmptyWhenIdle(t *testing.T) {
-	if got := statusbarLine(engine.Snapshot{}, "⠋", 100, 0); got != "" {
+	if got := statusbarLine(engine.Snapshot{}, "⠋", 100); got != "" {
 		t.Fatalf("statusbar = %q, want empty", got)
 	}
 	// active download but between files: nothing is being fetched yet
-	if got := statusbarLine(engine.Snapshot{ActiveID: 3}, "⠋", 100, 0); got != "" {
+	if got := statusbarLine(engine.Snapshot{ActiveID: 3}, "⠋", 100); got != "" {
 		t.Fatalf("statusbar = %q, want empty", got)
 	}
 }
@@ -382,13 +382,13 @@ func TestStatusbarMarksHeldQueueHead(t *testing.T) {
 	if !strings.Contains(got, styleWarn.Render(pausedRate)) {
 		t.Fatalf("statusbar = %q, want yellow state %q", got, styleWarn.Render(pausedRate))
 	}
-	// The bar turns the same yellow as the marker, lit by bands that have
-	// stopped where they stood rather than blinking out.
-	wantBar := shineProgressBar(20, 0.4, 0, true)
+	// The bar turns the same yellow as the marker.
+	wantBar := progressBar(20, 0.4, true)
 	if !strings.Contains(got, wantBar) {
 		t.Fatalf("statusbar = %q, want the held bar %q", got, wantBar)
 	}
-	if colorEnabled() && strings.Contains(got, shineProgressBar(20, 0.4, 0, false)) {
+	if running := progressBar(20, 0.4, false); running != wantBar &&
+		strings.Contains(got, running) {
 		t.Fatalf("statusbar = %q, want no green fill in a held bar", got)
 	}
 	if detail := ansi.Strip(app.downloads.detailView(app.width)); strings.Contains(detail, "PAUSED") {
@@ -544,7 +544,7 @@ func TestStatusbarNarrowDropsByteCounts(t *testing.T) {
 		Rate:        1 << 20,
 	}
 
-	got := ansi.Strip(statusbarLine(snap, "⠋", 48, 0))
+	got := ansi.Strip(statusbarLine(snap, "⠋", 48))
 	if strings.Contains(got, " / ") {
 		t.Fatalf("statusbar = %q, want byte counts dropped", got)
 	}
@@ -620,14 +620,14 @@ func TestStatusbarProjectsTheCurrentFilesFinish(t *testing.T) {
 		AvgRate:     1, // 75 bytes left at a byte a second
 	}
 
-	if got := ansi.Strip(statusbarLine(snap, "⠋", 100, 0)); !strings.Contains(got, "~1m15s") {
+	if got := ansi.Strip(statusbarLine(snap, "⠋", 100)); !strings.Contains(got, "~1m15s") {
 		t.Fatalf("statusbar = %q, want the file's estimate", got)
 	}
 
 	// Nothing is moving, so there is nothing to project: an estimate frozen
 	// where the bytes stopped would keep promising a finish that isn't coming.
 	snap.Rate, snap.AvgRate = 0, 0
-	if got := ansi.Strip(statusbarLine(snap, "⠋", 100, 0)); strings.Contains(got, "~") {
+	if got := ansi.Strip(statusbarLine(snap, "⠋", 100)); strings.Contains(got, "~") {
 		t.Fatalf("statusbar = %q, want no estimate for a stalled transfer", got)
 	}
 }
@@ -644,13 +644,13 @@ func TestStatusbarNarrowDropsTheEstimateBeforeTheRate(t *testing.T) {
 		AvgRate:     1,
 	}
 
-	got := ansi.Strip(statusbarLine(snap, "⠋", 80, 0))
+	got := ansi.Strip(statusbarLine(snap, "⠋", 80))
 	if strings.Contains(got, " / ") || !strings.Contains(got, "~50s") ||
 		!strings.Contains(got, "MiB/s") {
 		t.Fatalf("statusbar at 80 = %q, want the estimate and rate without byte counts", got)
 	}
 
-	got = ansi.Strip(statusbarLine(snap, "⠋", 60, 0))
+	got = ansi.Strip(statusbarLine(snap, "⠋", 60))
 	if strings.Contains(got, "~") || !strings.Contains(got, "MiB/s") {
 		t.Fatalf("statusbar at 60 = %q, want the rate alone", got)
 	}

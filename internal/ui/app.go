@@ -46,9 +46,6 @@ type App struct {
 
 	spinner  spinner.Model
 	spinning bool // spinner tick loop in flight
-	// shine is where the statusbar sweep's bands stand; its clock runs exactly
-	// while the repaint loop is in flight
-	shine shineClock
 
 	quota6h int64
 	// spark holds quotaWindow's transfer totals bucketed over time, oldest
@@ -90,7 +87,7 @@ func NewApp(cfg *config.Config, database *db.DB, eng *engine.Engine, drv mega.Dr
 func (a *App) Init() tea.Cmd {
 	a.refreshQuota()
 	a.downloads.restore()
-	return tea.Batch(a.waitEngine(), tickCmd(), a.spinCmd(), a.shineCmd())
+	return tea.Batch(a.waitEngine(), tickCmd(), a.spinCmd())
 }
 
 func (a *App) waitEngine() tea.Cmd {
@@ -128,28 +125,6 @@ func (a *App) spinCmd() tea.Cmd {
 	return a.spinner.Tick
 }
 
-// sweeping reports whether the statusbar's bar has light travelling along it
-// right now, which is the same question as whether a file is being fetched. A
-// held queue's bands are lit but standing still, so they need no repaints.
-func (a *App) sweeping() bool {
-	if a.eng == nil {
-		return false
-	}
-	return sweepRuns(a.eng.Snapshot())
-}
-
-// shineCmd starts the sweep's repaint loop when a transfer is in flight; like
-// the spinner's, the loop drops itself once the bytes stop. The clock starts
-// with the loop and from wherever the bands were left standing, so a resumed
-// download picks the pattern up rather than jumping it somewhere new.
-func (a *App) shineCmd() tea.Cmd {
-	if !a.shine.since.IsZero() || !a.sweeping() {
-		return nil
-	}
-	a.shine = a.shine.start(time.Now())
-	return shineTickCmd()
-}
-
 // spinFrame is the current spinner glyph without its style, so rows can color
 // it themselves or drop it into a fully highlighted line. Between downloads
 // the frame simply holds still. An app that never went through NewApp has no
@@ -180,29 +155,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case engineMsg:
 		a.refreshQuota()
 		a.downloads.reload()
-		return a, tea.Batch(a.waitEngine(), a.spinCmd(), a.shineCmd())
+		return a, tea.Batch(a.waitEngine(), a.spinCmd())
 
 	case tickMsg:
 		a.refreshQuota()
-		return a, tea.Batch(tickCmd(), a.spinCmd(), a.shineCmd())
+		return a, tea.Batch(tickCmd(), a.spinCmd())
 
 	case cursorTickMsg:
 		// Answered ahead of the modal flows below: a dialog opened while the
 		// bars are still travelling would otherwise swallow the tick and strand
 		// the loop, leaving the bars stuck at half width behind it.
 		return a, a.downloads.cursorTick()
-
-	case shineTickMsg:
-		// Answered before the modals below for the same reason the cursor tick
-		// is: a dialog opened over a running download would otherwise swallow
-		// the tick and leave the bands stranded mid-bar.
-		if !a.sweeping() {
-			// The bands stop where this frame finds them, which is where the
-			// next run will start them from.
-			a.shine = a.shine.stop(time.Now())
-			return a, nil
-		}
-		return a, shineTickCmd()
 
 	case spinner.TickMsg:
 		if !a.downloading() {
@@ -415,7 +378,7 @@ func (a *App) statusbarView() string {
 		if head := a.downloads.head; head.file != nil && head.file.LocalPath == snap.CurrentPath {
 			snap.FileDone = max(snap.FileDone, head.partial)
 		}
-		return statusbarLine(snap, a.spinner.View(), a.width, a.shine.offsetAt(time.Now()))
+		return statusbarLine(snap, a.spinner.View(), a.width)
 	}
 
 	head := a.downloads.head
@@ -442,10 +405,7 @@ func (a *App) statusbarView() string {
 	fetching := head.dl.ID == snap.ActiveID
 	frac := fileProgress(*f, snap, false, head.partial)
 	marker := fileMarker(fileMarkerStateOf(*f, fetching, snap.Paused, frac), a.spinFrame())
-	// Nothing is being fetched, so the bands stand where the clock stopped them
-	// — the same bar a held queue draws, which is why resuming one neither
-	// blinks the light off nor jumps it while the engine works back to a file.
-	return statusbarLine(next, marker, a.width, a.shine.offsetAt(time.Now()))
+	return statusbarLine(next, marker, a.width)
 }
 
 // bytesPair can reach 1024.0 at a unit boundary because it rounds to one
@@ -456,10 +416,9 @@ const statusbarBytesW = len("1024.0 / 1024.0 MiB")
 // statusbarLine renders the strip above the footer for a file transfer:
 // marker, name, progress bar, percent, bytes, estimate, and rate. It stays one
 // line: the file being fetched is what the strip is for, and the queue behind
-// it is what the library pane already shows. The marker arrives
-// already styled, and offset says how far along the bar the sweep's bands have
-// travelled. Empty when there is no transfer to draw.
-func statusbarLine(snap engine.Snapshot, marker string, width int, offset float64) string {
+// it is what the library pane already shows. The marker arrives already styled.
+// Empty when there is no transfer to draw.
+func statusbarLine(snap engine.Snapshot, marker string, width int) string {
 	if snap.ActiveID == 0 || snap.CurrentFile == "" {
 		return ""
 	}
@@ -518,7 +477,7 @@ func statusbarLine(snap engine.Snapshot, marker string, width int, offset float6
 		return ""
 	}
 
-	bar := shineProgressBar(barW, frac, offset, snap.Paused)
+	bar := progressBar(barW, frac, snap.Paused)
 	left := " " + marker + " " + truncate(snap.CurrentFile, nameW())
 	tail := bar + " " + styleTitle.Render(percent)
 	for _, f := range stats[drop:] {

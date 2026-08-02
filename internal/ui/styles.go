@@ -516,16 +516,6 @@ func percentText(frac float64) string {
 // way a full one does instead of floating in the middle of its column.
 var eighthBlocks = [7]string{"▏", "▎", "▍", "▌", "▋", "▊", "▉"}
 
-// barCells splits frac over width cells: the whole cells the fill covers, plus
-// the eighths of the cell it ends part-way across. Every drawing of the
-// statusbar's bar goes through this, so the plain bar and the sweeping one put
-// their boundary in exactly the same place.
-func barCells(width int, frac float64) (filled, rem int) {
-	frac = min(1, max(0, frac))
-	eighths := int(frac * float64(width) * 8)
-	return eighths / 8, eighths % 8
-}
-
 // progressBar renders a fixed-width bar for frac in [0,1], green while the
 // queue runs and yellow while it is held — the same yellow the pause marker and
 // the file rows use, so the whole screen agrees at a glance. The leading cell is
@@ -543,7 +533,10 @@ func progressBar(width int, frac float64, paused bool) string {
 	if paused {
 		fill = styleWarn
 	}
-	filled, rem := barCells(width, frac)
+	// The whole cells the fill covers and the eighths of the cell it ends
+	// part-way across come out of the same division.
+	eighths := int(min(1, max(0, frac)) * float64(width) * 8)
+	filled, rem := eighths/8, eighths%8
 	bar := fill.Render(strings.Repeat("█", filled))
 	if rem > 0 {
 		bar += fill.Background(colorTrack).Render(eighthBlocks[rem-1])
