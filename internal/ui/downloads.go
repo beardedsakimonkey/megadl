@@ -760,9 +760,9 @@ func (m *downloadsModel) mouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
-// clickDownload selects the download on body row y and toggles its queue
-// membership on a double click. The filter prompt is not a row to land on, so
-// a click on it does nothing.
+// clickDownload selects the download on body row y; clicking the selected
+// row again moves focus to its files, the way l does. The filter prompt is not
+// a row to land on, so a click on it does nothing.
 func (m *downloadsModel) clickDownload(y int) {
 	i := m.scroll + y - m.listHeader()
 	if i < 0 || i >= len(m.rows) {
@@ -771,13 +771,14 @@ func (m *downloadsModel) clickDownload(y int) {
 	double := m.clicks.press(clickDownload, i)
 	m.selectRow(i)
 	if double {
-		m.toggleDownload()
+		if len(m.files) > 0 {
+			m.pane = paneFiles
+		}
 	}
 }
 
 // clickFile selects the row on body row y of the file pane — a file or a
-// directory header, both being focusable — and toggles a file's queue
-// membership on a double click.
+// directory header, both being focusable — and plays a file on a double click.
 func (m *downloadsModel) clickFile(y int) tea.Cmd {
 	if y == 0 || m.cursor >= len(m.rows) {
 		return nil // pane title
@@ -789,7 +790,7 @@ func (m *downloadsModel) clickFile(y int) tea.Cmd {
 	double := m.clicks.press(clickFile, i)
 	m.selectTreeRow(i)
 	if double && m.tree[i].dir == "" {
-		m.toggleFile()
+		return m.openSelectedFile()
 	}
 	return nil
 }
@@ -1058,25 +1059,25 @@ func (m *downloadsModel) help() string {
 	}
 	if m.pane == paneFiles {
 		return renderShortcuts(
-			shortcut{keys: []string{"j/k"}, label: "move"},
-			shortcut{keys: []string{"J/K"}, label: "folder"},
+			shortcut{keys: []string{"h/j/k/l"}, label: "move"},
+			shortcut{keys: []string{"a"}, label: "add"},
 			shortcut{keys: []string{"space"}, label: m.toggleLabel()},
 			shortcut{keys: []string{"⏎"}, label: "open"},
 			shortcut{keys: []string{"p"}, label: m.pauseLabel()},
 			shortcut{keys: []string{"f"}, label: "focus"},
+			shortcut{keys: []string{"J/K"}, label: "folder"},
+			shortcut{keys: []string{"z"}, label: "center"},
 			shortcut{keys: []string{"r"}, label: "rename"},
 			shortcut{keys: []string{"R"}, label: "refresh"},
-			shortcut{keys: []string{"h"}, label: "back"},
 			m.filterShortcut(),
 			shortcut{keys: []string{"q"}, label: "quit"},
-			shortcut{keys: []string{"z"}, label: "center"},
 		)
 	}
 	return renderShortcuts(
+		shortcut{keys: []string{"h/j/k/l"}, label: "move"},
 		shortcut{keys: []string{"a"}, label: "add"},
 		shortcut{keys: []string{"space"}, label: m.toggleLabel()},
 		shortcut{keys: []string{"⏎"}, label: "open"},
-		shortcut{keys: []string{"l"}, label: "enter"},
 		shortcut{keys: []string{"p"}, label: m.pauseLabel()},
 		shortcut{keys: []string{"f"}, label: "focus"},
 		shortcut{keys: []string{"r"}, label: "rename"},
