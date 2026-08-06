@@ -69,6 +69,19 @@ func TestShortcutSeparatorsAreNotBold(t *testing.T) {
 	}
 }
 
+func TestShortcutHintsAreSeparatedByMiddots(t *testing.T) {
+	got := renderShortcuts(
+		shortcut{keys: []string{"a"}, label: "add"},
+		shortcut{keys: []string{"q"}, label: "quit"},
+	)
+	want := styleHelpKey.Render("a") + " " + styleDim.Render("add") +
+		styleDim.Render(" · ") +
+		styleHelpKey.Render("q") + " " + styleDim.Render("quit")
+	if got != want {
+		t.Fatalf("shortcuts = %q, want %q", got, want)
+	}
+}
+
 func TestPrimaryStylesUseTheTerminalsRed(t *testing.T) {
 	if got := styleAccent.GetForeground(); got != colorPrimary {
 		t.Fatalf("accent foreground = %v, want %v", got, colorPrimary)

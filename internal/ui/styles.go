@@ -593,7 +593,7 @@ func renderShortcuts(shortcuts ...shortcut) string {
 		rendered = append(rendered,
 			strings.Join(keys, styleDim.Render(" or "))+" "+styleDim.Render(shortcut.label))
 	}
-	return strings.Join(rendered, styleDim.Render("  "))
+	return strings.Join(rendered, styleDim.Render(" · "))
 }
 
 // renderShortcutKey keeps slash-separated alternatives visually separate from
