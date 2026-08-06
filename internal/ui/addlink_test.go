@@ -697,3 +697,35 @@ func TestAddlinkNavigatesSubmittedLinkHistory(t *testing.T) {
 		t.Fatalf("down while at draft = %q, want draft", got)
 	}
 }
+
+// Paging through links shows what each one was added as, so a history entry is
+// recognizable without reading the URL.
+func TestAddlinkShowsTheNameALinkWasAddedUnder(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+	if _, err := database.InsertDownload(&db.Download{
+		URL:      "https://mega.nz/folder/AAAAAAAA#key",
+		Handle:   "AAAAAAAA",
+		LinkType: "folder",
+		Name:     "My Show",
+		DestPath: filepath.Join(app.cfg.DownloadDir, "My Show"),
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	app.downloads.reload()
+
+	m := newAddlinkModel(app)
+	if view := ansi.Strip(m.view()); strings.Contains(view, "My Show") {
+		t.Fatalf("empty prompt names a download: %q", view)
+	}
+
+	m.updateKey(tea.KeyMsg{Type: tea.KeyUp})
+	if view := ansi.Strip(m.view()); !strings.Contains(view, "My Show") {
+		t.Fatalf("history entry = %q, want it to name the download", view)
+	}
+
+	// Typing over the link leaves the name describing something else, so it goes.
+	m.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if view := ansi.Strip(m.view()); strings.Contains(view, "My Show") {
+		t.Fatalf("edited link still names a download: %q", view)
+	}
+}

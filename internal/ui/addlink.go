@@ -59,7 +59,7 @@ type addlinkModel struct {
 	nameInput textinput.Model
 	spin      spinner.Model
 
-	linkHistory  []string
+	linkHistory  []db.LinkEntry
 	historyIndex int
 	historyDraft string
 
@@ -129,7 +129,7 @@ func (m *addlinkModel) previousURL() {
 	} else if m.historyIndex < len(m.linkHistory)-1 {
 		m.historyIndex++
 	}
-	m.urlInput.SetValue(m.linkHistory[m.historyIndex])
+	m.urlInput.SetValue(m.linkHistory[m.historyIndex].URL)
 	m.urlInput.CursorEnd()
 	m.errMsg = ""
 	m.refreshLinkHint()
@@ -141,7 +141,7 @@ func (m *addlinkModel) nextURL() {
 	}
 	if m.historyIndex > 0 {
 		m.historyIndex--
-		m.urlInput.SetValue(m.linkHistory[m.historyIndex])
+		m.urlInput.SetValue(m.linkHistory[m.historyIndex].URL)
 	} else {
 		m.historyIndex = -1
 		m.urlInput.SetValue(m.historyDraft)
@@ -149,6 +149,24 @@ func (m *addlinkModel) nextURL() {
 	m.urlInput.CursorEnd()
 	m.errMsg = ""
 	m.refreshLinkHint()
+}
+
+// historyNameView is the name the link now in the prompt was added under,
+// aligned under the link itself. Editing the link drops the line: the name
+// belongs to what was paged to, not to whatever is being typed over it. An
+// entry whose download has since been deleted keeps its name — that is what it
+// was called, and what makes a link in the history recognizable.
+func (m *addlinkModel) historyNameView() string {
+	if m.state != stateURL || m.historyIndex < 0 || m.historyIndex >= len(m.linkHistory) {
+		return ""
+	}
+	entry := m.linkHistory[m.historyIndex]
+	if entry.Name == "" || entry.URL != m.urlInput.Value() {
+		return ""
+	}
+	indent := strings.Repeat(" ", promptWidth(m.urlInput))
+	name := truncateMiddle(entry.Name, max(8, m.width-lipgloss.Width(indent)))
+	return styleDim.Render(indent + name)
 }
 
 // urlListingView is the URL line the user submitted, with the spinner standing
@@ -548,6 +566,9 @@ func (m *addlinkModel) help() string {
 func (m *addlinkModel) view() string {
 	w := m.width
 	body := m.urlLineView()
+	if line := m.historyNameView(); line != "" {
+		body += "\n" + line
+	}
 	if m.state == stateName {
 		count, bytes := m.totals()
 		summary := fmt.Sprintf("%d file(s), %s → ", count, humanBytes(bytes))

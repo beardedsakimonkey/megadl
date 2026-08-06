@@ -142,6 +142,14 @@ type File struct {
 	Queued     bool // in the download queue; false = user removed it
 }
 
+// LinkEntry is a link that was added, with the name it went in under. The
+// download it named may since have been deleted; the entry is what was
+// submitted, not what the library currently holds.
+type LinkEntry struct {
+	URL  string
+	Name string
+}
+
 type DB struct {
 	sql *sql.DB
 }
@@ -275,19 +283,19 @@ func (d *DB) InsertDownload(dl *Download, files []File) (int64, error) {
 // LinkHistory returns the links that have been added, newest first. It is not
 // scoped to the library: a deleted download leaves its link behind, since
 // re-adding it is exactly what the prompt is paged back through for.
-func (d *DB) LinkHistory() ([]string, error) {
-	rows, err := d.sql.Query(`SELECT url FROM link_history ORDER BY id DESC`)
+func (d *DB) LinkHistory() ([]LinkEntry, error) {
+	rows, err := d.sql.Query(`SELECT url, name FROM link_history ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	var out []LinkEntry
 	for rows.Next() {
-		var url string
-		if err := rows.Scan(&url); err != nil {
+		var e LinkEntry
+		if err := rows.Scan(&e.URL, &e.Name); err != nil {
 			return nil, err
 		}
-		out = append(out, url)
+		out = append(out, e)
 	}
 	return out, rows.Err()
 }

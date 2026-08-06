@@ -610,35 +610,31 @@ func TestLinkHistoryOutlivesItsDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, err := d.LinkHistory(); err != nil || !slices.Equal(got, []string{"u2", "u1"}) {
-		t.Fatalf("LinkHistory = %v, %v, want newest first", got, err)
+	want := []LinkEntry{{URL: "u2", Name: "Second"}, {URL: "u1", Name: "First"}}
+	if got, err := d.LinkHistory(); err != nil || !slices.Equal(got, want) {
+		t.Fatalf("LinkHistory = %v, %v, want newest first: %v", got, err, want)
 	}
 
 	// The download is gone from disk and from the library, but the link that
-	// produced it is still the one you would page back to.
+	// produced it is still the one you would page back to, under the name it
+	// went in as.
 	if err := d.DeleteDownload(first); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := d.LinkHistory(); err != nil || !slices.Equal(got, []string{"u2", "u1"}) {
+	if got, err := d.LinkHistory(); err != nil || !slices.Equal(got, want) {
 		t.Fatalf("after delete: LinkHistory = %v, %v", got, err)
 	}
 
-	// Adding a link again records the name it went in under and moves it back
-	// to the front, rather than leaving a second row for the same URL.
+	// Adding a link again records the name it went in under this time and moves
+	// it back to the front, rather than leaving a second row for the same URL.
 	if _, err := d.InsertDownload(&Download{
 		URL: "u1", Handle: "h1", LinkType: "folder", Name: "First Again", DestPath: "/lib/First Again",
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := d.LinkHistory(); err != nil || !slices.Equal(got, []string{"u1", "u2"}) {
-		t.Fatalf("after re-adding: LinkHistory = %v, %v", got, err)
-	}
-	var name string
-	if err := d.sql.QueryRow(`SELECT name FROM link_history WHERE url = 'u1'`).Scan(&name); err != nil {
-		t.Fatal(err)
-	}
-	if name != "First Again" {
-		t.Fatalf("recorded name = %q, want %q", name, "First Again")
+	want = []LinkEntry{{URL: "u1", Name: "First Again"}, {URL: "u2", Name: "Second"}}
+	if got, err := d.LinkHistory(); err != nil || !slices.Equal(got, want) {
+		t.Fatalf("after re-adding: LinkHistory = %v, %v, want %v", got, err, want)
 	}
 }
 
