@@ -430,14 +430,14 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 	if m.filtering() {
 		return m.filterKey(key)
 	}
-	// esc clears the filter and nothing else: it never moves the selection, so
-	// dropping a query can't cost you your place. Every other key clears the
-	// notice as a side effect of acting.
+	// esc dismisses the notice and the filter and nothing else: it never moves
+	// the selection, so dropping a query can't cost you your place. Every other
+	// key clears the notice as a side effect of acting.
+	m.setNotice("")
 	if key.String() == "esc" {
 		m.clearFilter()
 		return nil
 	}
-	m.setNotice("")
 
 	if key.String() == "/" {
 		return m.startFilter()

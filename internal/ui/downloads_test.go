@@ -1339,18 +1339,18 @@ func TestSpaceOnDownloadedFileNotices(t *testing.T) {
 	}
 }
 
-// esc belongs to the filter now, so it leaves everything else where it found
-// it: the notice it used to dismiss, and the panes' own selection.
-func TestEscWithNoFilterLeavesTheViewAlone(t *testing.T) {
+// esc dismisses the notice like every other key, but leaves the panes' own
+// selection where it found it.
+func TestEscWithNoFilterOnlyClearsTheNotice(t *testing.T) {
 	app, _, _ := toggleTestApp(t)
 	m := &app.downloads
 	m.pane = paneFiles
 	m.treeCursor = 1
-	m.notice = "something happened"
+	m.setNoticeErr("play failed: mpv executable not found")
 
 	m.update(tea.KeyMsg{Type: tea.KeyEsc})
-	if m.notice != "something happened" {
-		t.Fatalf("notice = %q, want it left up", m.notice)
+	if m.notice != "" {
+		t.Fatalf("notice = %q after esc, want it dismissed", m.notice)
 	}
 	if m.pane != paneFiles || m.treeCursor != 1 {
 		t.Fatalf("esc moved the selection: pane %v, file cursor %d", m.pane, m.treeCursor)
