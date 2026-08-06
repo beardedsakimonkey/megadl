@@ -43,6 +43,32 @@ func TestShortcutStylesFilterKeyAsBoldAndColored(t *testing.T) {
 	}
 }
 
+func TestShortcutSeparatorsAreNotBold(t *testing.T) {
+	got := renderShortcuts(shortcut{
+		keys:  []string{"h/j/k/l", "J/K"},
+		label: "move",
+	})
+	want := strings.Join([]string{
+		strings.Join([]string{
+			styleHelpKey.Render("h"),
+			styleDim.Render("/"),
+			styleHelpKey.Render("j"),
+			styleDim.Render("/"),
+			styleHelpKey.Render("k"),
+			styleDim.Render("/"),
+			styleHelpKey.Render("l"),
+		}, ""),
+		strings.Join([]string{
+			styleHelpKey.Render("J"),
+			styleDim.Render("/"),
+			styleHelpKey.Render("K"),
+		}, ""),
+	}, styleDim.Render(" or ")) + " " + styleDim.Render("move")
+	if got != want {
+		t.Fatalf("shortcut = %q, want %q", got, want)
+	}
+}
+
 func TestPrimaryStylesUseTheTerminalsRed(t *testing.T) {
 	if got := styleAccent.GetForeground(); got != colorPrimary {
 		t.Fatalf("accent foreground = %v, want %v", got, colorPrimary)
