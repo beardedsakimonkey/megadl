@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"net/url"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -46,6 +47,51 @@ func inputLineView(in textinput.Model) string {
 		view += strings.Repeat(" ", pad)
 	}
 	return view
+}
+
+// linkedInputView is inputLineView with the value marked as an OSC 8
+// hyperlink whenever the value is one, so a link the app itself can't act on —
+// a shortener standing in front of the mega link, say — is still one click
+// away in the terminal. The escape occupies no cells, so a terminal that
+// doesn't understand it draws exactly the line it drew before.
+func linkedInputView(in textinput.Model) string {
+	view := inputLineView(in)
+	uri, ok := clickableURL(in.Value())
+	if !ok {
+		return view
+	}
+	prompt := in.PromptStyle.Render(in.Prompt)
+	value, found := strings.CutPrefix(view, prompt)
+	if !found {
+		return view
+	}
+	// The input pads the rest of its field with spaces, and colors them along
+	// with the value it is padding — so the link ends at the last cell that
+	// isn't blank rather than wherever those spaces stop carrying styling.
+	cells := lipgloss.Width(strings.TrimRight(ansi.Strip(value), " "))
+	return prompt + hyperlink(ansi.Truncate(value, cells, ""), uri) +
+		ansi.TruncateLeft(value, cells, "")
+}
+
+// hyperlink marks text as a link to uri for terminals that support OSC 8,
+// which usually open it on ctrl- or cmd-click.
+func hyperlink(text, uri string) string {
+	return ansi.SetHyperlink(uri) + text + ansi.ResetHyperlink()
+}
+
+// clickableURL reports the http(s) URL s holds, if that is all it holds. The
+// URI goes to the terminal inside an escape sequence, so text carrying control
+// characters of its own is refused rather than passed along.
+func clickableURL(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.ContainsFunc(s, func(r rune) bool { return r < ' ' || r == 0x7f }) {
+		return "", false
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", false
+	}
+	return s, true
 }
 
 // rect is a region of the terminal grid.

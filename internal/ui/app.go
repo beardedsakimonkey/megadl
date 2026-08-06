@@ -106,6 +106,23 @@ func (a *App) refreshQuota() {
 	a.spark, _ = a.db.TransferBuckets(quotaWindow, sparkBuckets)
 }
 
+// setAddlink opens or closes the add-link dialog, and hands the mouse back to
+// the terminal for as long as it is up. Nothing in the dialog is aimed at with
+// a mouse, and a terminal that isn't reporting mouse events is one that can
+// still hover a link, select the text of one, and open it on a plain click —
+// which is the whole point of marking the link in the first place.
+func (a *App) setAddlink(m *addlinkModel) tea.Cmd {
+	was := a.addlink != nil
+	a.addlink = m
+	switch {
+	case m != nil && !was:
+		return tea.DisableMouse
+	case m == nil && was:
+		return tea.EnableMouseCellMotion
+	}
+	return nil
+}
+
 // downloading reports whether the engine is fetching a file right now.
 func (a *App) downloading() bool {
 	if a.eng == nil {
@@ -174,8 +191,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		if a.addlink != nil {
 			model, cmd := a.addlink.update(msg)
-			a.addlink = model
-			cmds = append(cmds, cmd)
+			cmds = append(cmds, a.setAddlink(model), cmd)
 		}
 		if a.downloading() {
 			var cmd tea.Cmd
@@ -202,8 +218,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// modal flows capture everything while open, pastes included
 	if a.addlink != nil {
 		model, cmd := a.addlink.update(msg)
-		a.addlink = model
-		return a, cmd
+		return a, tea.Batch(a.setAddlink(model), cmd)
 	}
 	if a.rename != nil {
 		model, cmd := a.rename.update(msg)
@@ -227,18 +242,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// pasting anywhere means "add this link": open the dialog and let
 		// the paste land in its URL prompt
 		if isPaste(key) {
-			a.addlink = newAddlinkModel(a)
+			openCmd := a.setAddlink(newAddlinkModel(a))
 			initCmd := a.addlink.init()
 			model, cmd := a.addlink.update(key)
-			a.addlink = model
-			return a, tea.Batch(initCmd, cmd)
+			return a, tea.Batch(openCmd, initCmd, a.setAddlink(model), cmd)
 		}
 		switch key.String() {
 		case "q", "ctrl+c":
 			return a, tea.Quit
 		case "a":
-			a.addlink = newAddlinkModel(a)
-			return a, a.addlink.init()
+			openCmd := a.setAddlink(newAddlinkModel(a))
+			return a, tea.Batch(openCmd, a.addlink.init())
 		case "p":
 			// the queue is paused as a whole, so this ignores the cursor
 			// and acts on whatever the status bar is showing

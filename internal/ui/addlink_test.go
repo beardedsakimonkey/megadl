@@ -362,6 +362,35 @@ func TestAddlinkDecodesBase64NonMegaURL(t *testing.T) {
 	}
 }
 
+// A decoded link the app can't act on — a shortener in front of the real one —
+// is still a link the terminal can open, so the prompt marks whatever URL it
+// holds with OSC 8. The mark costs no cells, so the dialog keeps its width.
+func TestAddlinkMarksURLInPromptAsHyperlink(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+	link := "https://lnk.snahp.eu/g5dZzax2Q2rYwGnwApWzOm1oo3LcOGtsZoU09"
+
+	m := newAddlinkModel(app)
+	m.urlInput.SetValue("not a link at all")
+	m.urlInput.CursorEnd()
+	plain := m.view()
+	if strings.Contains(plain, "\x1b]8;") {
+		t.Fatalf("non-URL input carries a hyperlink:\n%q", plain)
+	}
+
+	m.urlInput.SetValue(link)
+	m.urlInput.CursorEnd()
+	view := m.view()
+	if !strings.Contains(view, "\x1b]8;;"+link+"\x07"+link) {
+		t.Fatalf("prompt does not link the URL it holds:\n%q", view)
+	}
+	if !strings.Contains(view, "\x1b]8;;\x07") {
+		t.Fatalf("hyperlink is never closed, so the rest of the screen joins it:\n%q", view)
+	}
+	if got, want := lipgloss.Width(view), lipgloss.Width(plain); got != want {
+		t.Fatalf("linked dialog width = %d, want %d", got, want)
+	}
+}
+
 func TestAddlinkColorsOnlyMegaLinkInputOrange(t *testing.T) {
 	app, _ := openAddlinkTestApp(t)
 	link := "https://mega.nz/file/EEEEEEEE#0123456789abcdefghijkl"

@@ -596,7 +596,7 @@ func (m *addlinkModel) urlLineView() string {
 	case stateListing:
 		return m.urlListingView()
 	}
-	return inputLineView(m.urlInput)
+	return linkedInputView(m.urlInput)
 }
 
 func (m *addlinkModel) decodeFrameView(width int) string {

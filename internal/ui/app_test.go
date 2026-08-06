@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -700,6 +701,47 @@ func TestCtrlVOpensAddlinkDialogAndReadsClipboard(t *testing.T) {
 	// touch the real clipboard, so only its presence is checked
 	if cmd == nil {
 		t.Fatal("ctrl+v should schedule a clipboard read")
+	}
+}
+
+// cmdMsgs runs cmd and collects what it produces, flattening batches, so a
+// test can look for one message among everything an update asked for.
+func cmdMsgs(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range batch {
+			out = append(out, cmdMsgs(c)...)
+		}
+		return out
+	}
+	return []tea.Msg{msg}
+}
+
+// While the dialog is up the mouse belongs to the terminal, so the link in the
+// prompt can be hovered, selected and clicked; the app takes it back on close.
+func TestAddlinkDialogHandsTheMouseToTheTerminal(t *testing.T) {
+	app, _ := openAddlinkTestApp(t)
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	app = model.(*App)
+	if app.addlink == nil {
+		t.Fatal("\"a\" should open the add-link dialog")
+	}
+	if !slices.Contains(cmdMsgs(cmd), tea.DisableMouse()) {
+		t.Fatal("opening the dialog left mouse reporting on")
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	app = model.(*App)
+	if app.addlink != nil {
+		t.Fatal("esc should close the add-link dialog")
+	}
+	if !slices.Contains(cmdMsgs(cmd), tea.EnableMouseCellMotion()) {
+		t.Fatal("closing the dialog left mouse reporting off")
 	}
 }
 
