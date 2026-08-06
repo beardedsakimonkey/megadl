@@ -334,8 +334,43 @@ const inQueue = `EXISTS (SELECT 1 FROM download_files
 
 // queueOrder is the order the engine works through the queue: whenever a
 // download joined it, oldest first. Re-adding one sets queued_at again, which
-// sends it to the back.
+// sends it to the back. MoveToFront restamps in the other direction.
 const queueOrder = `ORDER BY queued_at ASC, id ASC`
+
+// MoveToFront sends a download to the head of the queue by restamping
+// queued_at ahead of everything else waiting. keepID stays in front of it —
+// pass the download being fetched, since the engine does not preempt and the
+// status bar and list markers read the head as the one running; pass 0 when
+// nothing is running. Both stamps are rewritten so the order holds even when
+// queued_at, which has one-second resolution, collides.
+func (d *DB) MoveToFront(downloadID, keepID int64) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var waiting sql.NullInt64
+	if err := tx.QueryRow(`SELECT MIN(queued_at) FROM downloads
+		WHERE id NOT IN (?, ?) AND `+inQueue, downloadID, keepID).Scan(&waiting); err != nil {
+		return err
+	}
+	front := time.Now().Unix()
+	if waiting.Valid && waiting.Int64 <= front {
+		front = waiting.Int64 - 1
+	}
+	if _, err := tx.Exec(`UPDATE downloads SET queued_at = ? WHERE id = ?`,
+		front, downloadID); err != nil {
+		return err
+	}
+	if keepID != 0 {
+		if _, err := tx.Exec(`UPDATE downloads SET queued_at = ? WHERE id = ?`,
+			front-1, keepID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
 
 // NextQueued returns the download at the head of the queue, or nil.
 func (d *DB) NextQueued() (*Download, error) {

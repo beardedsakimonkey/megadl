@@ -157,19 +157,7 @@ func TestQueueingFileClearsError(t *testing.T) {
 // the end of it rather than jumping ahead of what is already waiting.
 func TestQueueOrder(t *testing.T) {
 	d := openTest(t)
-	mk := func(name string) int64 {
-		id, err := d.InsertDownload(&Download{
-			URL: "u" + name, Handle: "h" + name, LinkType: "folder",
-			Name: name, DestPath: "/x/" + name,
-		}, []File{
-			{NodeHandle: "n" + name, RemotePath: "/r/" + name,
-				LocalPath: "/x/" + name + "/f", Size: 10, Queued: true},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return id
-	}
+	mk := func(name string) int64 { return insertQueued(t, d, name) }
 	first, second, third := mk("a"), mk("b"), mk("c")
 
 	queue, err := d.Queue()
@@ -193,6 +181,55 @@ func TestQueueOrder(t *testing.T) {
 	}
 	if next, _ := d.NextQueued(); next == nil || next.ID != second {
 		t.Fatalf("head = %+v, want %d", next, second)
+	}
+}
+
+// insertQueued adds a download with one queued file and returns its id.
+func insertQueued(t *testing.T, d *DB, name string) int64 {
+	t.Helper()
+	id, err := d.InsertDownload(&Download{
+		URL: "u" + name, Handle: "h" + name, LinkType: "folder",
+		Name: name, DestPath: "/x/" + name,
+	}, []File{
+		{NodeHandle: "n" + name, RemotePath: "/r/" + name,
+			LocalPath: "/x/" + name + "/f", Size: 10, Queued: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// A download moved to the front jumps everything waiting, but not the one
+// being fetched. All three rows here are stamped in the same second, which is
+// the case the id tie-break would otherwise decide the wrong way.
+func TestMoveToFront(t *testing.T) {
+	d := openTest(t)
+	first, second, third := insertQueued(t, d, "a"), insertQueued(t, d, "b"), insertQueued(t, d, "c")
+
+	if err := d.MoveToFront(third, first); err != nil {
+		t.Fatal(err)
+	}
+	queue, err := d.Queue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int64{first, third, second}; !slices.Equal(queue, want) {
+		t.Fatalf("queue = %v, want %v", queue, want)
+	}
+	if next, _ := d.NextQueued(); next == nil || next.ID != first {
+		t.Fatalf("running download lost the head: %+v", next)
+	}
+
+	// nothing running: the front is the front
+	if err := d.MoveToFront(second, 0); err != nil {
+		t.Fatal(err)
+	}
+	if queue, err = d.Queue(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []int64{second, first, third}; !slices.Equal(queue, want) {
+		t.Fatalf("queue = %v, want %v", queue, want)
 	}
 }
 

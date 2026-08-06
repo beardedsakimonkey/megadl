@@ -498,7 +498,9 @@ func (m *addlinkModel) enqueue(rawName string) error {
 	if err != nil {
 		return err
 	}
-	m.app.eng.Kick()
+	// a link the user just added is what they want next, not after whatever
+	// has been waiting
+	m.app.eng.EnqueueFront(id)
 	m.app.downloads.selectNewDownload(id)
 	return nil
 }

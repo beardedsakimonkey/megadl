@@ -493,6 +493,24 @@ func (e *Engine) RetryNow() {
 	e.notify()
 }
 
+// EnqueueFront sends an already-queued download to the head of the queue,
+// ahead of everything waiting. Whatever is running keeps the front — the engine
+// does not preempt — so the promoted download is what starts next.
+func (e *Engine) EnqueueFront(id int64) {
+	e.mu.Lock()
+	var running int64
+	if e.act != nil {
+		running = e.act.id
+	}
+	e.mu.Unlock()
+
+	if err := e.db.MoveToFront(id, running); err != nil {
+		return
+	}
+	e.Kick()
+	e.notify()
+}
+
 // Enqueue puts a download at the back of the queue, taking everything in it
 // that is not already on disk.
 func (e *Engine) Enqueue(id int64) {
