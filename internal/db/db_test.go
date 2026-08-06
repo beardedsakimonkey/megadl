@@ -595,6 +595,53 @@ func TestFindByResource(t *testing.T) {
 	}
 }
 
+func TestLinkHistoryOutlivesItsDownload(t *testing.T) {
+	d := openTest(t)
+
+	first, err := d.InsertDownload(&Download{
+		URL: "u1", Handle: "h1", LinkType: "folder", Name: "First", DestPath: "/lib/First",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertDownload(&Download{
+		URL: "u2", Handle: "h2", LinkType: "folder", Name: "Second", DestPath: "/lib/Second",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := d.LinkHistory(); err != nil || !slices.Equal(got, []string{"u2", "u1"}) {
+		t.Fatalf("LinkHistory = %v, %v, want newest first", got, err)
+	}
+
+	// The download is gone from disk and from the library, but the link that
+	// produced it is still the one you would page back to.
+	if err := d.DeleteDownload(first); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := d.LinkHistory(); err != nil || !slices.Equal(got, []string{"u2", "u1"}) {
+		t.Fatalf("after delete: LinkHistory = %v, %v", got, err)
+	}
+
+	// Adding a link again records the name it went in under and moves it back
+	// to the front, rather than leaving a second row for the same URL.
+	if _, err := d.InsertDownload(&Download{
+		URL: "u1", Handle: "h1", LinkType: "folder", Name: "First Again", DestPath: "/lib/First Again",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := d.LinkHistory(); err != nil || !slices.Equal(got, []string{"u1", "u2"}) {
+		t.Fatalf("after re-adding: LinkHistory = %v, %v", got, err)
+	}
+	var name string
+	if err := d.sql.QueryRow(`SELECT name FROM link_history WHERE url = 'u1'`).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "First Again" {
+		t.Fatalf("recorded name = %q, want %q", name, "First Again")
+	}
+}
+
 func TestSelectionPersistsAndClearsWithItsDownload(t *testing.T) {
 	d := openTest(t)
 

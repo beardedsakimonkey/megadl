@@ -42,6 +42,10 @@ MEGA protocol implementation (no external downloader).
   focusable: space on one queues or dequeues every fetchable file beneath it, and
   a folder has no database row to remember it by — `cursorDir` is what survives
   the reload that follows every engine event.
+- `link_history` is the add-link prompt's history and is deliberately unrelated
+  to `downloads`: no foreign key, so deleting a download leaves the link that
+  produced it behind. Re-submitting a link moves its row rather than adding a
+  second, and `id` order is the submission order the prompt pages through.
 - Keep Bubble Tea `Update` paths non-blocking; perform I/O in `tea.Cmd`s.
 - Prefer ANSI terminal colors over hex color literals in UI styling.
 - SQLite schema changes must include a migration path for existing databases

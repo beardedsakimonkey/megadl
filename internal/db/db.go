@@ -74,6 +74,19 @@ CREATE TABLE IF NOT EXISTS queue_state (
   paused INTEGER NOT NULL DEFAULT 0,
   reason TEXT NOT NULL DEFAULT ''
 );
+
+-- Links the user has added, for the add-link prompt to page back through.
+-- Deliberately unrelated to downloads: deleting a download takes its folder off
+-- disk, but the link that produced it is still the thing you would type next,
+-- so it has no foreign key and outlives the row it came from.
+-- name is what the link was added to the library as, kept for the record; the
+-- download it named may be long gone.
+CREATE TABLE IF NOT EXISTS link_history (
+  id           INTEGER PRIMARY KEY,
+  url          TEXT NOT NULL UNIQUE,
+  name         TEXT NOT NULL DEFAULT '',
+  submitted_at INTEGER NOT NULL
+);
 `
 
 // Download statuses. The column records only terminal outcomes; whether a
@@ -170,6 +183,7 @@ func Open(path string) (*DB, error) {
 		`ALTER TABLE download_files ADD COLUMN completed_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE ui_state ADD COLUMN files_pane_selected INTEGER NOT NULL DEFAULT 0
 			CHECK (files_pane_selected IN (0,1))`,
+		`ALTER TABLE link_history ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := h.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			h.Close()
@@ -190,6 +204,15 @@ func Open(path string) (*DB, error) {
 		`UPDATE download_files SET completed_at = COALESCE(
 			(SELECT completed_at FROM downloads WHERE id = download_id), 0)
 			WHERE status = 'done' AND completed_at = 0`,
+		// Link history used to be read off the library, so anything still in it
+		// seeds the table. OR IGNORE keeps this idempotent, and keeps a URL the
+		// table already carries at the stamp it was last submitted under.
+		// The bare name is the one from the row MAX picked, i.e. what the link
+		// was most recently added as. Oldest first so the ids the rows land on
+		// carry the same order the stamps do.
+		`INSERT OR IGNORE INTO link_history (url, name, submitted_at)
+			SELECT url, name, MAX(created_at) AS ts FROM downloads
+			WHERE url <> '' GROUP BY url ORDER BY ts ASC`,
 	} {
 		if _, err := h.Exec(stmt); err != nil {
 			h.Close()
@@ -230,7 +253,43 @@ func (d *DB) InsertDownload(dl *Download, files []File) (int64, error) {
 			return 0, err
 		}
 	}
+	// A link is remembered by the same act that adds it, so the prompt's
+	// history covers exactly what was submitted, no more and no less.
+	// A link submitted again is the same entry moved back to the front, not a
+	// second one: the old row goes and a new id puts it at the head. Ordering
+	// by id rather than the stamp keeps that exact, since two submissions can
+	// land in the same second.
+	if dl.URL != "" {
+		if _, err := tx.Exec(`DELETE FROM link_history WHERE url = ?`, dl.URL); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO link_history (url, name, submitted_at) VALUES (?,?,?)`,
+			dl.URL, dl.Name, now); err != nil {
+			return 0, err
+		}
+	}
 	return id, tx.Commit()
+}
+
+// LinkHistory returns the links that have been added, newest first. It is not
+// scoped to the library: a deleted download leaves its link behind, since
+// re-adding it is exactly what the prompt is paged back through for.
+func (d *DB) LinkHistory() ([]string, error) {
+	rows, err := d.sql.Query(`SELECT url FROM link_history ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			return nil, err
+		}
+		out = append(out, url)
+	}
+	return out, rows.Err()
 }
 
 // MergeFiles inserts listing rows not tracked yet (matched by node handle)

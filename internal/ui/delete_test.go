@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"megadl/internal/db"
@@ -120,6 +121,21 @@ func TestDeleteRemovesAFileLinkPartial(t *testing.T) {
 
 	if _, err := os.Stat(tmp); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("os.Stat(%q) err = %v, want not-exist", tmp, err)
+	}
+}
+
+// Deleting a download is about the folder on disk, not about the link: the
+// prompt still pages back to it, which is what re-adding it starts from.
+func TestDeleteKeepsTheLinkInTheAddlinkHistory(t *testing.T) {
+	app, _, _ := deleteTestApp(t)
+	openDelete(t, app)
+
+	typeKeys(app, "y")
+
+	m := newAddlinkModel(app)
+	m.updateKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.urlInput.Value(); got != "u" {
+		t.Fatalf("history after deleting the download = %q, want the link back", got)
 	}
 }
 

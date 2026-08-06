@@ -100,12 +100,16 @@ func newAddlinkModel(app *App) *addlinkModel {
 		spinner.WithStyle(styleSpinner),
 	)
 
+	// The history is read once, when the dialog opens: nothing adds to it
+	// while the dialog is up except the submission that closes it.
+	history, _ := app.db.LinkHistory()
+
 	return &addlinkModel{
 		app:          app,
 		urlInput:     url,
 		nameInput:    name,
 		spin:         sp,
-		linkHistory:  submittedLinkHistory(app.downloads.all),
+		linkHistory:  history,
 		historyIndex: -1,
 		width:        w,
 	}
@@ -113,20 +117,6 @@ func newAddlinkModel(app *App) *addlinkModel {
 
 func (m *addlinkModel) init() tea.Cmd {
 	return textinput.Blink
-}
-
-// submittedLinkHistory returns distinct library URLs, newest first.
-func submittedLinkHistory(downloads []*db.Download) []string {
-	seen := make(map[string]bool, len(downloads))
-	history := make([]string, 0, len(downloads))
-	for _, dl := range downloads {
-		if dl.URL == "" || seen[dl.URL] {
-			continue
-		}
-		seen[dl.URL] = true
-		history = append(history, dl.URL)
-	}
-	return history
 }
 
 func (m *addlinkModel) previousURL() {
