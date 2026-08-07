@@ -436,6 +436,35 @@ func TestStatusbarMarksHeldQueueHead(t *testing.T) {
 	}
 }
 
+// Only one megadl fetches from a library at a time. The instances watching say
+// so where the rate would be — their bar still climbs, since the partial it
+// measures is being written by the one that has the queue.
+func TestStatusbarSaysWhenAnotherInstanceHasTheQueue(t *testing.T) {
+	snap := engine.Snapshot{
+		ActiveID:    1,
+		CurrentFile: "episode-01.mkv",
+		FileSize:    100,
+		FileDone:    40,
+		Elsewhere:   true,
+	}
+
+	got := statusbarLine(snap, queuedGlyph, 100)
+	if plain := ansi.Strip(got); !strings.Contains(plain, "ELSEWHERE") {
+		t.Fatalf("statusbar = %q, want ELSEWHERE in the rate column", plain)
+	}
+	state := fmt.Sprintf("%*s", len("1023.9 KiB/s"), "ELSEWHERE")
+	if !strings.Contains(got, styleDim.Render(state)) {
+		t.Fatalf("statusbar = %q, want dim state %q", got, styleDim.Render(state))
+	}
+
+	// A pause is the more specific answer, and the one the user can act on.
+	snap.Paused = true
+	plain := ansi.Strip(statusbarLine(snap, queuedGlyph, 100))
+	if !strings.Contains(plain, "PAUSED") || strings.Contains(plain, "ELSEWHERE") {
+		t.Fatalf("statusbar = %q, want PAUSED to win the state column", plain)
+	}
+}
+
 // pacedProc reports a couple of chunks landing and then goes quiet, the way a
 // transfer held mid-file does. Unlike startedProc it exits on the way out —
 // the engine only lets go of a download that says it ended — and the buffer

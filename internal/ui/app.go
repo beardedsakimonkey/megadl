@@ -415,6 +415,7 @@ func (a *App) statusbarView() string {
 		FileDone:    head.partial,
 		AvgRate:     snap.AvgRate,
 		Paused:      snap.Paused,
+		Elsewhere:   snap.Elsewhere,
 	}
 	// the file's own marker, so the strip and its row in the file pane agree:
 	// spinning while its download runs between files, held while the queue is
@@ -449,15 +450,22 @@ func statusbarLine(snap engine.Snapshot, marker string, width int) string {
 	// instead of jumping about with the speed the column beside it reports.
 	eta := fmt.Sprintf("%*s", etaW, etaText(snap.FileSize-snap.FileDone, snap.AvgRate))
 	// A zero rate keeps its (blank) column so the line doesn't reflow when the
-	// transfer stalls or has just started. A paused queue uses that same
-	// column for its state, keeping every field to its left in place.
+	// transfer stalls or has just started. A queue that isn't this instance's
+	// to run — held, or being run by another megadl — uses that same column to
+	// say so, keeping every field to its left in place.
 	const rateW = len("1023.9 KiB/s")
 	rate := fmt.Sprintf("%*s", rateW, humanRate(snap.Rate))
 	rateStyled := rate
-	if snap.Paused {
+	switch {
+	case snap.Paused:
 		rate = fmt.Sprintf("%*s", rateW, "PAUSED")
 		rateStyled = styleWarn.Render(rate)
-	} else if snap.Rate > 0 {
+	case snap.Elsewhere:
+		// nothing is moving here, but the bar still climbs: the partial this
+		// row is measuring is being written by the instance that has the queue
+		rate = fmt.Sprintf("%*s", rateW, "ELSEWHERE")
+		rateStyled = styleDim.Render(rate)
+	case snap.Rate > 0:
 		rateStyled = rateStyle(snap.Rate).Render(rate)
 	}
 

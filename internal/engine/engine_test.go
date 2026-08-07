@@ -379,6 +379,128 @@ func TestEnginePauseHoldsTheQueue(t *testing.T) {
 	}
 }
 
+// fakeLock stands in for the guard between two megadls. taken is what the
+// other instance is doing with it; held is what this engine managed to get.
+type fakeLock struct {
+	mu    sync.Mutex
+	taken bool
+	held  bool
+}
+
+var _ QueueLock = (*fakeLock)(nil)
+
+func (l *fakeLock) TryAcquire() (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.taken {
+		return false, nil
+	}
+	l.held = true
+	return true, nil
+}
+
+func (l *fakeLock) Release() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.held = false
+}
+
+// give is the other instance letting go of the queue.
+func (l *fakeLock) give() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.taken = false
+}
+
+func (l *fakeLock) heldHere() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.held
+}
+
+// Two megadls on one library would write the same partial from both ends, so
+// only the instance holding the queue lock fetches. One that can't get it
+// leaves the queue alone and says as much, then takes over the moment the
+// instance that had it lets go.
+func TestEngineWaitsForTheQueueLock(t *testing.T) {
+	drv := newFakeDriver(driverRun{
+		events: []mega.Event{
+			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+		},
+		waitForStop: true,
+	})
+
+	d := testDB(t)
+	id := insertDownload(t, d)
+
+	lock := &fakeLock{taken: true} // another instance is fetching
+	eng := New(drv, d)
+	eng.SetLock(lock)
+	eng.LockRetry = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eng.Run(ctx)
+	eng.Kick()
+
+	time.Sleep(100 * time.Millisecond)
+	if started := drv.startedArgs(); len(started) != 0 {
+		t.Errorf("started a download without the queue lock: %+v", started)
+	}
+	if !eng.Snapshot().Elsewhere {
+		t.Error("snapshot should report the queue as another instance's")
+	}
+	// Nothing was consumed by waiting: the download is still at the head.
+	if next, _ := d.NextQueued(); next == nil || next.ID != id {
+		t.Fatalf("head of the queue = %+v, want %d", next, id)
+	}
+
+	lock.give()
+	waitActive(t, eng, id)
+	if snap := eng.Snapshot(); snap.Elsewhere {
+		t.Error("snapshot still reports the queue as elsewhere while fetching")
+	}
+	if !lock.heldHere() {
+		t.Error("engine fetched without holding the queue lock")
+	}
+}
+
+// The lock covers a download in flight, not an instance's whole run, so a
+// megadl with nothing to fetch — paused here — hands the library back rather
+// than sitting on it.
+func TestEnginePauseHandsTheQueueLockBack(t *testing.T) {
+	drv := newFakeDriver(driverRun{
+		events: []mega.Event{
+			mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+		},
+		waitForStop: true,
+	})
+
+	d := testDB(t)
+	id := insertDownload(t, d)
+
+	lock := &fakeLock{}
+	eng := New(drv, d)
+	eng.SetLock(lock)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eng.Run(ctx)
+	eng.Kick()
+
+	waitActive(t, eng, id)
+	eng.SetPaused(true)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for lock.heldHere() {
+		if time.Now().After(deadline) {
+			t.Fatal("pause never let go of the queue lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if eng.Snapshot().Elsewhere {
+		t.Error("a queue this instance stopped asking for is not elsewhere")
+	}
+}
+
 // A pause survives the process, so the engine comes back up holding the queue
 // instead of pulling on a link that was deliberately stopped.
 func TestEnginePauseSurvivesRestart(t *testing.T) {

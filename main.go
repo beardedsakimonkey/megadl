@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -13,6 +14,7 @@ import (
 	"megadl/internal/db"
 	"megadl/internal/engine"
 	"megadl/internal/library"
+	"megadl/internal/lockfile"
 	"megadl/internal/meganet"
 	"megadl/internal/ui"
 )
@@ -39,6 +41,10 @@ func run() error {
 	database.PruneTransferLog()
 
 	eng := engine.New(drv, database)
+	// Several megadls can watch one library, but only one of them may fetch
+	// from it, so the queue is guarded by a lock that lives beside the
+	// database. Whoever has something to run takes it; the rest watch.
+	eng.SetLock(lockfile.New(filepath.Join(cfg.DownloadDir, ".megadl.lock")))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go eng.Run(ctx)

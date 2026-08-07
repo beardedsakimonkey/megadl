@@ -14,6 +14,7 @@ MEGA protocol implementation (no external downloader).
 - `internal/engine`: single-active-download queue, stop/resume, and quota accounting.
 - `internal/db`: SQLite schema, migrations, and persistence.
 - `internal/ui`: Bubble Tea models and views.
+- `internal/lockfile`: advisory `flock` used as the queue lock between instances.
 - `internal/config`, `internal/naming`: configuration and safe destination naming.
 
 ## Working conventions
@@ -35,6 +36,13 @@ MEGA protocol implementation (no external downloader).
   `queued_at`. `downloads.status` records only terminal outcomes (`done`,
   `error`); never derive "running/waiting/paused" from it. Pausing is one flag
   on `queue_state` covering the whole queue, and it survives restarts.
+- Several instances can watch one library, but only the one holding the
+  `.megadl.lock` flock beside the database may fetch from it: two processes
+  writing the same partial would interleave their bytes and fail its MAC. The
+  engine takes the lock as a download starts and lets it go the moment nothing
+  is running, so an idle or paused instance never sits on the queue. Note that
+  the rest of the engine's state is per-process — a pause made in one instance
+  is not seen by another until it restarts.
 - List markers describe what is on disk and what the queue will do about it,
   never a status field, so they cannot go stale. Keep every glyph one cell
   wide or the name columns shift.

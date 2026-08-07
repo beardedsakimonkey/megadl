@@ -49,6 +49,12 @@ type Snapshot struct {
 	// a download is active. PauseReason is empty when the user did it.
 	Paused      bool
 	PauseReason string
+	// Elsewhere reports that another megadl holds the queue: this instance is
+	// watching the same library rather than fetching from it. Nothing here is
+	// moving, but the file the strip is on may well be — the other instance is
+	// writing the same partial, and the on-disk size the rows read is its
+	// progress.
+	Elsewhere bool
 }
 
 // RetryWait is a driver backoff in progress: why the chunk failed, which
@@ -112,12 +118,31 @@ type restarting struct {
 	path string
 }
 
+// QueueLock is the guard that keeps two megadl instances off the same library.
+// Only the instance holding it may fetch; the rest read the database and watch.
+// It is taken as a download starts and let go when nothing is running, so an
+// idle or paused instance never keeps another one from working.
+type QueueLock interface {
+	// TryAcquire takes the lock if it is free, reporting whether this instance
+	// holds it afterwards. It does not wait for a lock held elsewhere.
+	TryAcquire() (bool, error)
+	// Release lets the lock go. Releasing one this instance does not hold is
+	// a no-op.
+	Release()
+}
+
 type Engine struct {
 	drv mega.Driver
 	db  *db.DB
+	// lock is nil when nothing guards the queue, which is how the engine runs
+	// under test: one process, one engine, nothing to be shut out by.
+	lock QueueLock
 
 	// Notify coalesces "state changed" signals for the UI.
 	Notify chan struct{}
+	// LockRetry is how often an instance shut out of the queue asks for it
+	// again; default flushInterval.
+	LockRetry time.Duration
 
 	mu          sync.Mutex
 	act         *active
@@ -126,6 +151,10 @@ type Engine struct {
 	kick        chan struct{}
 	paused      bool // mirrors queue_state, which is the durable copy
 	pauseReason string
+	// lockedOut records that the queue lock went to another instance, so the
+	// tick loop keeps asking for it: the instance holding it can quit at any
+	// moment, and this one takes over when it does.
+	lockedOut bool
 	// lastAvg is the smoothed rate the last run was managing when it ended,
 	// kept so a held queue can still say how long the file it stopped on has
 	// left. It is a rate that was, not one that is: the longer the queue sits,
@@ -149,6 +178,39 @@ func New(drv mega.Driver, database *db.DB) *Engine {
 	return e
 }
 
+// SetLock hands the engine the lock that decides which instance runs the
+// queue. Call before Run; an engine without one assumes it is alone.
+func (e *Engine) SetLock(l QueueLock) { e.lock = l }
+
+// acquire takes the queue lock, reporting whether this instance may fetch.
+// Failing to get it is remembered rather than retried here: maybeStart has
+// nothing to wait for, and the tick loop asks again soon enough.
+func (e *Engine) acquire() bool {
+	if e.lock == nil {
+		return true
+	}
+	ok, err := e.lock.TryAcquire()
+	held := ok && err == nil
+
+	e.mu.Lock()
+	was := e.lockedOut
+	e.lockedOut = !held
+	changed := was != e.lockedOut
+	e.mu.Unlock()
+	if changed {
+		e.notify() // so the strip can say who is doing the fetching
+	}
+	return held
+}
+
+// release lets the queue go now that nothing is running here, leaving it to
+// whichever instance asks for it next.
+func (e *Engine) release() {
+	if e.lock != nil {
+		e.lock.Release()
+	}
+}
+
 func (e *Engine) notify() {
 	select {
 	case e.Notify <- struct{}{}:
@@ -164,10 +226,22 @@ func (e *Engine) Kick() {
 	}
 }
 
+func (e *Engine) lockRetry() time.Duration {
+	if e.LockRetry > 0 {
+		return e.LockRetry
+	}
+	return flushInterval
+}
+
 // Run drives the queue until ctx is cancelled. Call in a goroutine.
 func (e *Engine) Run(ctx context.Context) {
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
+	// The queue lock is asked for on a clock of its own: the instance holding
+	// it owes no notice before it quits, so the only way to find out it has is
+	// to keep asking.
+	lockTicker := time.NewTicker(e.lockRetry())
+	defer lockTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -178,12 +252,22 @@ func (e *Engine) Run(ctx context.Context) {
 			}
 			e.mu.Unlock()
 			e.flush()
+			e.release()
 			return
 		case <-e.kick:
 			e.maybeStart(ctx)
 		case <-ticker.C:
 			e.flush()
 			e.notify()
+		case <-lockTicker.C:
+			// The instance that had the queue may have let go of it since the
+			// last ask, in which case this one takes over from here.
+			e.mu.Lock()
+			out := e.lockedOut
+			e.mu.Unlock()
+			if out {
+				e.maybeStart(ctx)
+			}
 		}
 	}
 }
@@ -228,6 +312,15 @@ func (e *Engine) maybeStart(ctx context.Context) {
 		return
 	}
 
+	// Only one instance may fetch a library: two processes writing the same
+	// .megatmp partial would interleave their bytes and fail the MAC that
+	// verifies it, throwing away both their work. The lock is taken here, with
+	// something to run, rather than held from startup — an instance sitting on
+	// a paused or empty queue has no claim on it.
+	if !e.acquire() {
+		return
+	}
+
 	args := mega.DownloadArgs{URL: dl.URL, Path: dl.DestPath}
 	if dl.LinkType == "folder" {
 		args.SelectHandles = handles
@@ -255,6 +348,7 @@ func (e *Engine) maybeStart(ctx context.Context) {
 	proc, err := e.drv.Start(ctx, args)
 	if err != nil {
 		e.db.SetStatus(dl.ID, db.StatusError, err.Error())
+		e.release() // nothing started, so nothing here is using the library
 		e.notify()
 		return
 	}
@@ -420,6 +514,10 @@ func (e *Engine) finishLocked(a *active, exitErr error) {
 	}
 
 	e.act = nil
+	// Nothing is being written here any more, so the library goes back on
+	// offer. The Kick below asks for it straight back when there is more to
+	// fetch, which is why an instance draining a queue keeps hold of it.
+	e.release()
 	e.Kick()
 }
 
@@ -631,6 +729,9 @@ func (e *Engine) setPausedLocked(paused bool, reason string) {
 		e.db.SetPaused(paused, reason)
 	}
 	if paused {
+		// A held queue has stopped asking for the lock, so it is no longer
+		// being shut out of anything.
+		e.lockedOut = false
 		// A restart in flight isn't coming back until the pause lifts, so let
 		// go of the download it was standing in for.
 		e.restart = nil
@@ -663,7 +764,12 @@ func (e *Engine) Snapshot() Snapshot {
 		// Nothing is moving, but the last run's speed is still the best answer
 		// there is to how long what it stopped on takes, so a held queue keeps
 		// projecting from it rather than falling silent.
-		s := Snapshot{AvgRate: e.lastAvg, Paused: e.paused, PauseReason: e.pauseReason}
+		s := Snapshot{
+			AvgRate:     e.lastAvg,
+			Paused:      e.paused,
+			PauseReason: e.pauseReason,
+			Elsewhere:   e.lockedOut,
+		}
 		if e.restart != nil {
 			// No byte counts to report mid-restart; the on-disk partial keeps
 			// the row's progress where it was.
