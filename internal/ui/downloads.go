@@ -1119,6 +1119,9 @@ func (m *downloadsModel) toggleLabel() string {
 	queued := m.queued(m.rows[m.cursor])
 	if m.pane == paneFiles && m.treeCursor < len(m.tree) {
 		if i := m.cursorFile(); i >= 0 {
+			if m.files[i].Status == db.FileDone || m.files[i].Status == db.FileSkipped {
+				return "queue"
+			}
 			queued = m.files[i].Queued
 		} else {
 			queued = allQueued(m.eligibleFiles(m.treeCursor))

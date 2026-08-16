@@ -1711,6 +1711,17 @@ func TestToggleLabelFollowsSelection(t *testing.T) {
 	if got := m.toggleLabel(); got != "queue" {
 		t.Fatalf("label for unqueued file = %q, want %q", got, "queue")
 	}
+
+	if err := database.SetFileQueued(m.files[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetFileStatusByHandle(id, m.files[0].NodeHandle, db.FileDone); err != nil {
+		t.Fatal(err)
+	}
+	m.reload()
+	if got := m.toggleLabel(); got != "queue" {
+		t.Fatalf("label for completed file = %q, want %q", got, "queue")
+	}
 }
 
 func TestPauseLabelFollowsTheQueue(t *testing.T) {
