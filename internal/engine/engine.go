@@ -98,6 +98,7 @@ type active struct {
 	stopping     bool
 	paused       bool // held by the user or by quota; stays in the queue
 	requeue      bool // restart with a changed file selection after exit
+	preempted    bool // a newer download moved ahead; this one stays resumable
 	lastError    string
 	fileFailed   bool
 	endStatus    int
@@ -474,7 +475,7 @@ func (e *Engine) finishLocked(a *active, exitErr error) {
 	e.flushLocked() // credit remaining bytes while e.act still points here
 
 	switch {
-	case a.stopping, a.paused, a.requeue:
+	case a.stopping, a.paused, a.requeue, a.preempted:
 		// no outcome to record: the queue already says what happens next
 	case a.gotEnd && a.endStatus == 0 && !a.fileFailed:
 		if !e.hasQueuedFilesAddedAfterStart(a) {
@@ -499,7 +500,7 @@ func (e *Engine) finishLocked(a *active, exitErr error) {
 		e.db.DequeuePendingFiles(a.id)
 	}
 
-	if a.requeue && !a.stopping && !a.paused {
+	if a.requeue && !a.stopping && !a.paused && !a.preempted {
 		// The download is still the one running; only its file selection
 		// changed. Hold on to what it was fetching so the Kick below can hand
 		// the spinner straight over to the replacement process.
@@ -591,20 +592,25 @@ func (e *Engine) RetryNow() {
 	e.notify()
 }
 
-// EnqueueFront sends an already-queued download to the head of the queue,
-// ahead of everything waiting. Whatever is running keeps the front — the engine
-// does not preempt — so the promoted download is what starts next.
+// EnqueueFront sends an already-queued download to the head of the queue. A
+// different active download is stopped but stays queued, so its partial remains
+// resumable after the promoted download finishes. A paused queue stays paused.
 func (e *Engine) EnqueueFront(id int64) {
-	e.mu.Lock()
-	var running int64
-	if e.act != nil {
-		running = e.act.id
-	}
-	e.mu.Unlock()
-
-	if err := e.db.MoveToFront(id, running); err != nil {
+	if err := e.db.MoveToFront(id, 0); err != nil {
 		return
 	}
+
+	e.mu.Lock()
+	if e.act != nil && e.act.id != id && !e.act.stopping &&
+		!e.act.paused && !e.act.preempted && !e.act.gotEnd {
+		e.act.preempted = true
+		// A changed selection can already be stopping this process. Its exit
+		// will now start the promoted download instead of restarting this one.
+		if !e.act.requeue {
+			e.act.proc.Stop()
+		}
+	}
+	e.mu.Unlock()
 	e.Kick()
 	e.notify()
 }

@@ -200,8 +200,8 @@ func insertQueued(t *testing.T, d *DB, name string) int64 {
 	return id
 }
 
-// A download moved to the front jumps everything waiting, but not the one
-// being fetched. All three rows here are stamped in the same second, which is
+// A download moved to the front jumps everything waiting except an optional
+// protected head. All three rows here are stamped in the same second, which is
 // the case the id tie-break would otherwise decide the wrong way.
 func TestMoveToFront(t *testing.T) {
 	d := openTest(t)
@@ -218,7 +218,7 @@ func TestMoveToFront(t *testing.T) {
 		t.Fatalf("queue = %v, want %v", queue, want)
 	}
 	if next, _ := d.NextQueued(); next == nil || next.ID != first {
-		t.Fatalf("running download lost the head: %+v", next)
+		t.Fatalf("protected download lost the head: %+v", next)
 	}
 
 	// nothing running: the front is the front

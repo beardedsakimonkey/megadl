@@ -405,11 +405,9 @@ const inQueue = `EXISTS (SELECT 1 FROM download_files
 const queueOrder = `ORDER BY queued_at ASC, id ASC`
 
 // MoveToFront sends a download to the head of the queue by restamping
-// queued_at ahead of everything else waiting. keepID stays in front of it —
-// pass the download being fetched, since the engine does not preempt and the
-// status bar and list markers read the head as the one running; pass 0 when
-// nothing is running. Both stamps are rewritten so the order holds even when
-// queued_at, which has one-second resolution, collides.
+// queued_at ahead of everything else waiting. keepID optionally stays in front
+// of it; pass 0 for the absolute front. Both stamps are rewritten so the order
+// holds even when queued_at, which has one-second resolution, collides.
 func (d *DB) MoveToFront(downloadID, keepID int64) error {
 	tx, err := d.sql.Begin()
 	if err != nil {

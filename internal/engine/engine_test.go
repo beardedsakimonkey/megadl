@@ -331,6 +331,100 @@ func TestEngineDequeueLeavesResumableState(t *testing.T) {
 	waitQueued(t, d, id, true)
 }
 
+// A newly added download runs now, even when another download is active. The
+// interrupted download keeps its queue place and progress so it can resume
+// after the new one finishes.
+func TestEngineEnqueueFrontPreemptsActiveDownload(t *testing.T) {
+	releaseNew := make(chan struct{})
+	releaseResume := make(chan struct{})
+	drv := newFakeDriver(
+		driverRun{
+			events: []mega.Event{
+				mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+				mega.ProgressEvent{Done: -1, Total: 100},
+				mega.ProgressEvent{Done: 20, Total: 100},
+			},
+			waitForStop: true,
+		},
+		driverRun{
+			events: []mega.Event{
+				mega.FileStartEvent{Path: "/new.zip", Remote: "/new.zip", Size: 10},
+				mega.FileDoneEvent{Path: "/new.zip"},
+				mega.EndEvent{Status: 0},
+			},
+			waitAfter: 1,
+			release:   releaseNew,
+		},
+		driverRun{
+			events: []mega.Event{
+				mega.FileStartEvent{Path: "/fake/a.mkv", Remote: "/Root/a.mkv", Size: 100},
+				mega.FileDoneEvent{Path: "/fake/a.mkv"},
+				mega.FileSkipEvent{Path: "/fake/b.mkv"},
+				mega.EndEvent{Status: 0},
+			},
+			waitAfter: 1,
+			release:   releaseResume,
+		},
+	)
+
+	d := testDB(t)
+	firstID := insertDownload(t, d)
+	eng := New(drv, d)
+	go eng.Run(t.Context())
+	eng.Kick()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for snap := eng.Snapshot(); snap.ActiveID != firstID || snap.FileDone != 20; snap = eng.Snapshot() {
+		if time.Now().After(deadline) {
+			t.Fatalf("first download did not reach its partial state: %+v", snap)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	newID, err := d.InsertDownload(&db.Download{
+		URL:    "https://mega.nz/file/BBBBBBBB#kkkkkkkkkkkkkkkkkkkkkk",
+		Handle: "BBBBBBBB", LinkType: "file", Name: "new.zip",
+		DestPath: "/new.zip", TotalBytes: 10,
+	}, []db.File{{
+		NodeHandle: "BBBBBBBB", RemotePath: "/new.zip", LocalPath: "/new.zip",
+		Size: 10, Queued: true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.EnqueueFront(newID)
+	waitActive(t, eng, newID)
+
+	if got := drv.stopCount(); got != 1 {
+		t.Fatalf("active process stopped %d times, want once", got)
+	}
+	if queue, err := d.Queue(); err != nil || !slices.Equal(queue, []int64{newID, firstID}) {
+		t.Fatalf("queue after preemption = %v, %v; want [%d %d]", queue, err, newID, firstID)
+	}
+	first, err := d.Download(firstID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != db.StatusPending || first.DoneBytes != 20 {
+		t.Fatalf("interrupted download = %+v, want pending with 20 bytes kept", first)
+	}
+
+	close(releaseNew)
+	waitStatus(t, d, newID, db.StatusDone)
+	waitActive(t, eng, firstID)
+
+	started := drv.startedArgs()
+	if len(started) != 3 {
+		t.Fatalf("driver started %d times, want 3: %+v", len(started), started)
+	}
+	if got := []string{started[0].Path, started[1].Path, started[2].Path}; !slices.Equal(got, []string{"/fake", "/new.zip", "/fake"}) {
+		t.Errorf("start order = %v, want interrupted, new, resumed", got)
+	}
+
+	close(releaseResume)
+	waitStatus(t, d, firstID, db.StatusDone)
+}
+
 // Pausing holds the queue where it is: the download in flight is cancelled but
 // keeps its place at the head, and nothing else starts in its stead.
 func TestEnginePauseHoldsTheQueue(t *testing.T) {

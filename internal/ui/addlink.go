@@ -506,8 +506,8 @@ func (m *addlinkModel) enqueue(rawName string) error {
 	if err != nil {
 		return err
 	}
-	// a link the user just added is what they want next, not after whatever
-	// has been waiting
+	// A link the user just added runs now. Any active download keeps its
+	// resumable partial and returns to the queue behind this one.
 	m.app.eng.EnqueueFront(id)
 	m.app.downloads.selectNewDownload(id)
 	return nil
