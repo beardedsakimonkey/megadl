@@ -608,9 +608,9 @@ func playerModel(t *testing.T, files []db.File) (*downloadsModel, *[]string) {
 	opened := &[]string{}
 	m := &downloadsModel{
 		pane: paneFiles,
-		openFile: func(paths []string) error {
+		openFile: func(paths []string) (func() error, error) {
 			*opened = append(*opened, paths...)
-			return nil
+			return nil, nil
 		},
 	}
 	// The pane's tree, the way loadFiles builds it. The download standing in
@@ -862,8 +862,8 @@ func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
 	}
 	m := &downloadsModel{
 		pane: paneFiles,
-		openFile: func([]string) error {
-			return errors.New("mpv executable not found")
+		openFile: func([]string) (func() error, error) {
+			return nil, errors.New("mpv executable not found")
 		},
 	}
 	m.setFiles(&db.Download{DestPath: dir},
@@ -876,6 +876,36 @@ func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
 	m.update(cmd())
 	if !strings.Contains(m.notice, "mpv executable not found") {
 		t.Fatalf("notice = %q, want spawn error", m.notice)
+	}
+}
+
+func TestEnterReportsPlayerExitFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "e1.mkv")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &downloadsModel{
+		pane: paneFiles,
+		openFile: func([]string) (func() error, error) {
+			return func() error { return errors.New("exit status 2") }, nil
+		},
+	}
+	m.setFiles(&db.Download{DestPath: dir},
+		[]db.File{{LocalPath: path, Status: db.FileDone, Queued: true}})
+
+	openCmd := m.update(tea.KeyMsg{Type: tea.KeyEnter})
+	waitCmd := m.update(openCmd())
+	if waitCmd == nil {
+		t.Fatal("successful player start did not return a wait command")
+	}
+	if !strings.Contains(m.notice, "playing e1.mkv") {
+		t.Fatalf("notice = %q, want playing confirmation", m.notice)
+	}
+
+	m.update(waitCmd())
+	if !m.noticeErr || !strings.Contains(m.notice, "e1.mkv: exit status 2") {
+		t.Fatalf("notice = %q (error %t), want player exit error", m.notice, m.noticeErr)
 	}
 }
 
@@ -1184,9 +1214,9 @@ func TestEnterOnFolderPlaysItsFirstFile(t *testing.T) {
 	opened := &[]string{}
 	m := &downloadsModel{
 		pane: paneFiles,
-		openFile: func(paths []string) error {
+		openFile: func(paths []string) (func() error, error) {
 			*opened = append(*opened, paths...)
-			return nil
+			return nil, nil
 		},
 	}
 	m.setFiles(&db.Download{DestPath: dir}, files)

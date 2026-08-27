@@ -184,6 +184,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the loop, leaving the bars stuck at half width behind it.
 		return a, a.downloads.cursorTick()
 
+	case fileOpenedMsg, filePlayedMsg:
+		// Player results belong to the downloads view even if a dialog was
+		// opened while the player was running.
+		return a, a.downloads.update(msg)
+
 	case spinner.TickMsg:
 		// The statusbar and the add-link dialog spin independently, and a
 		// spinner drops ticks that aren't its own, so both have to see the

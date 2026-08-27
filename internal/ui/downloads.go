@@ -95,9 +95,10 @@ type downloadsModel struct {
 	listW, filesW, paneHeight int
 	clicks                    clickTracker
 
-	// openFile plays a downloaded file plus any queued playlist entries;
-	// nil means openInMPV. Test seam so tests never spawn a real player.
-	openFile func(paths []string) error
+	// openFile starts a downloaded file plus any queued playlist entries and
+	// returns a function that waits for the player to exit. nil means
+	// openInMPV. Test seam so tests never spawn a real player.
+	openFile func(paths []string) (wait func() error, err error)
 }
 
 // listingMergedMsg reports a finished remote-listing refresh.
@@ -110,7 +111,14 @@ type listingMergedMsg struct {
 type fileOpenedMsg struct {
 	name   string
 	queued int // sibling files autoplaying after it
+	wait   func() error
 	err    error
+}
+
+// filePlayedMsg reports a player exit after it started successfully.
+type filePlayedMsg struct {
+	name string
+	err  error
 }
 
 func newDownloadsModel(app *App) downloadsModel {
@@ -410,6 +418,18 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 			m.setNotice(fmt.Sprintf("playing %s (+%d queued)", res.name, res.queued))
 		default:
 			m.setNotice("playing " + res.name)
+		}
+		if res.err == nil && res.wait != nil {
+			return func() tea.Msg {
+				return filePlayedMsg{name: res.name, err: res.wait()}
+			}
+		}
+		return nil
+	}
+
+	if res, ok := msg.(filePlayedMsg); ok {
+		if res.err != nil {
+			m.setNoticeErr(fmt.Sprintf("play failed: %s: %v", res.name, res.err))
 		}
 		return nil
 	}
@@ -951,10 +971,12 @@ func (m *downloadsModel) playFrom(i int) tea.Cmd {
 		if _, err := os.Stat(path); err != nil {
 			return fileOpenedMsg{err: errors.New(name + " is not on disk yet")}
 		}
+		wait, err := open(append([]string{path}, queued...))
 		return fileOpenedMsg{
 			name:   name,
 			queued: len(queued),
-			err:    open(append([]string{path}, queued...)),
+			wait:   wait,
+			err:    err,
 		}
 	}
 }
@@ -1004,18 +1026,17 @@ func isMediaFile(path string) bool {
 // LaunchServices (`open -a`) adds seconds of startup latency — and puts it in
 // its own session with no stdio, so the TUI keeps the terminal and playback
 // survives megadl exiting or receiving ctrl+c.
-func openInMPV(paths []string) error {
+func openInMPV(paths []string) (func() error, error) {
 	bin := findMPV()
 	if bin == "" {
-		return errors.New("mpv executable not found")
+		return nil, errors.New("mpv executable not found")
 	}
 	cmd := exec.Command(bin, paths...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
-	go cmd.Wait() // reap so an exited player doesn't linger as a zombie
-	return nil
+	return cmd.Wait, nil
 }
 
 func findMPV() string {
