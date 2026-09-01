@@ -546,18 +546,15 @@ func progressBar(width int, frac float64, paused bool) string {
 }
 
 // fileProgressBar uses centered line glyphs so bars on adjacent file rows
-// remain visually separate. The active row gets a heavier filled segment,
-// colored like the pause marker while its queue is held.
-func fileProgressBar(width int, frac float64, active, paused bool) string {
+// remain visually separate. The active row colors the filled segment like
+// the pause marker while its queue is held.
+func fileProgressBar(width int, frac float64, paused bool) string {
 	if width < 2 {
 		return ""
 	}
 	frac = min(1, max(0, frac))
 	filled := int(frac * float64(width))
 	filledGlyph := "─"
-	if active {
-		filledGlyph = "━"
-	}
 	filledStyle := styleProgress
 	if paused {
 		filledStyle = styleWarn

@@ -72,24 +72,24 @@ func TestProgressBarFillsLeadingCellByEighths(t *testing.T) {
 }
 
 func TestFileProgressBarUsesCenteredGlyphs(t *testing.T) {
-	got := fileProgressBar(4, 0.5, false, false)
+	got := fileProgressBar(4, 0.5, false)
 	want := styleProgress.Render("──") + styleDim.Render("──")
 	if got != want {
 		t.Fatalf("fileProgressBar() = %q, want %q", got, want)
 	}
 }
 
-func TestActiveFileProgressBarUsesHeavyFilledGlyphs(t *testing.T) {
-	got := fileProgressBar(4, 0.5, true, false)
-	want := styleProgress.Render("━━") + styleDim.Render("──")
+func TestActiveFileProgressBarUsesLightFilledGlyphs(t *testing.T) {
+	got := fileProgressBar(4, 0.5, false)
+	want := styleProgress.Render("──") + styleDim.Render("──")
 	if got != want {
 		t.Fatalf("fileProgressBar() = %q, want %q", got, want)
 	}
 }
 
 func TestPausedFileProgressBarUsesOrangeFilledGlyphs(t *testing.T) {
-	got := fileProgressBar(4, 0.5, true, true)
-	want := styleWarn.Render("━━") + styleDim.Render("──")
+	got := fileProgressBar(4, 0.5, true)
+	want := styleWarn.Render("──") + styleDim.Render("──")
 	if got != want {
 		t.Fatalf("fileProgressBar() = %q, want %q", got, want)
 	}
@@ -375,12 +375,12 @@ func TestActiveFilePercentageUsesBoldTerminalForeground(t *testing.T) {
 	if !strings.Contains(got, want) {
 		t.Fatalf("active file row = %q, want styled percentage %q", got, want)
 	}
-	if plain := ansi.Strip(got); !strings.Contains(plain, "━━━━━─────  50%") {
-		t.Fatalf("active file row = %q, want heavy filled progress bar", plain)
+	if plain := ansi.Strip(got); !strings.Contains(plain, "──────────  50%") {
+		t.Fatalf("active file row = %q, want light filled progress bar", plain)
 	}
 }
 
-func TestPausedFileRowUsesOrangeHeavyProgressBar(t *testing.T) {
+func TestPausedFileRowUsesOrangeProgressBar(t *testing.T) {
 	m := &downloadsModel{partials: map[int64]int64{2: 50}}
 	f := db.File{
 		ID:        2,
@@ -391,9 +391,9 @@ func TestPausedFileRowUsesOrangeHeavyProgressBar(t *testing.T) {
 	}
 
 	got := m.fileRowView(f, &db.Download{ID: 7}, engine.Snapshot{Paused: true}, f.ID, false, 0, 60, 5)
-	want := styleWarn.Render("━━━━━") + styleDim.Render("─────")
+	want := styleWarn.Render("─────") + styleDim.Render("─────")
 	if !strings.Contains(got, want) {
-		t.Fatalf("paused file row = %q, want yellow heavy progress bar %q", got, want)
+		t.Fatalf("paused file row = %q, want orange light progress bar %q", got, want)
 	}
 	if !strings.Contains(got, styleActivePercent.Render(" 50%")) {
 		t.Fatalf("paused file row = %q, want active percentage styling", got)

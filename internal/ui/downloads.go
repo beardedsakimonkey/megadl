@@ -1507,7 +1507,7 @@ func (m *downloadsModel) fileRowView(f db.File, dl *db.Download, snap engine.Sna
 		if active {
 			percentStyle = styleActivePercent
 		}
-		bar = "  " + fileProgressBar(barW, frac, active, paused) + " " + percentStyle.Render(percent)
+		bar = "  " + fileProgressBar(barW, frac, paused) + " " + percentStyle.Render(percent)
 	}
 	st := fileMarkerStateOf(f, fetching, paused, frac)
 	line := m.cursorGutter(paneFiles, selected) + indent +
