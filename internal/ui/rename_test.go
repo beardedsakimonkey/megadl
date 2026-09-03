@@ -26,11 +26,13 @@ func renameTestApp(t *testing.T) (*App, *db.DB, int64) {
 	if err := os.WriteFile(filepath.Join(dest, "s1", "a.mkv"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	id, err := database.InsertDownload(&db.Download{
+	id, err := database.InsertDownloadListing(&db.Download{
 		URL: "u", Handle: "h", LinkType: "folder", Name: "Show", DestPath: dest,
 	}, []db.File{{
 		NodeHandle: "a", RemotePath: "/Show/s1/a.mkv",
 		LocalPath: filepath.Join(dest, "s1", "a.mkv"), Queued: true,
+	}}, []db.Directory{{
+		NodeHandle: "s1", RemotePath: "/Show/s1", LocalPath: filepath.Join(dest, "s1"),
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +93,13 @@ func TestRenameMovesFolderOnDiskAndRepointsRecords(t *testing.T) {
 	}
 	if want := filepath.Join(dest, "s1", "a.mkv"); files[0].LocalPath != want {
 		t.Fatalf("file path = %q, want %q", files[0].LocalPath, want)
+	}
+	dirs, err := database.Directories(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dest, "s1"); len(dirs) != 1 || dirs[0].LocalPath != want {
+		t.Fatalf("directory paths = %+v, want %q", dirs, want)
 	}
 	if !strings.Contains(app.downloads.notice, "Series2") {
 		t.Fatalf("notice = %q, want it to name the new folder", app.downloads.notice)

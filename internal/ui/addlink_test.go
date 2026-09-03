@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/base64"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -215,6 +216,59 @@ func TestAddlinkQueuesEveryFileInAFolderLink(t *testing.T) {
 		if !f.Queued {
 			t.Fatalf("file %q is not queued", f.NodeHandle)
 		}
+	}
+}
+
+func TestAddlinkDisplaysAndCreatesEmptyFolders(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+
+	url := "https://mega.nz/folder/AAAAAAAA#key"
+	m := newAddlinkModel(app)
+	m.url, m.linkType, m.state = url, "folder", stateListing
+	model, cmd := m.update(listResultMsg{
+		url: url,
+		nodes: []mega.Node{
+			{Path: "/Empty Set", Name: "Empty Set", Type: "folder", Handle: "root"},
+			{Path: "/Empty Set/Alpha", Name: "Alpha", Type: "folder", Handle: "alpha", Parent: "root"},
+			{Path: "/Empty Set/Alpha/Nested", Name: "Nested", Type: "folder", Handle: "nested", Parent: "alpha"},
+			{Path: "/Empty Set/Beta", Name: "Beta", Type: "folder", Handle: "beta", Parent: "root"},
+		},
+	})
+	if model != nil || cmd != nil {
+		t.Fatalf("empty-folder link should close modal: model=%+v, cmd=%v", model, cmd)
+	}
+
+	downloads, err := database.Downloads()
+	if err != nil || len(downloads) != 1 {
+		t.Fatalf("downloads = %+v, %v", downloads, err)
+	}
+	dirs, err := database.Directories(downloads[0].ID)
+	if err != nil || len(dirs) != 3 {
+		t.Fatalf("directories = %+v, %v", dirs, err)
+	}
+	for _, rel := range []string{"Alpha", filepath.Join("Alpha", "Nested"), "Beta"} {
+		path := filepath.Join(downloads[0].DestPath, rel)
+		if st, err := os.Stat(path); err != nil || !st.IsDir() {
+			t.Fatalf("empty folder %q was not created: %v", path, err)
+		}
+	}
+
+	if app.downloads.pane != paneFiles {
+		t.Fatalf("focused pane = %v, want files pane", app.downloads.pane)
+	}
+	if len(app.downloads.files) != 0 || len(app.downloads.tree) != 3 {
+		t.Fatalf("files/tree = %d/%+v, want three folder rows and no files",
+			len(app.downloads.files), app.downloads.tree)
+	}
+	view := ansi.Strip(app.downloads.view(100, 8))
+	for _, name := range []string{"Alpha/", "Nested/", "Beta/", "0/0 files"} {
+		if !strings.Contains(view, name) {
+			t.Fatalf("empty-folder view does not contain %q:\n%s", name, view)
+		}
+	}
+	if app.downloads.filesW == 0 || app.downloads.listW == 100 {
+		t.Fatalf("folder detail pane collapsed: list=%d files=%d",
+			app.downloads.listW, app.downloads.filesW)
 	}
 }
 

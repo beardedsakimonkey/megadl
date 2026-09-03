@@ -478,6 +478,7 @@ func (m *addlinkModel) enqueue(rawName string) error {
 	}
 
 	var files []db.File
+	var dirs []db.Directory
 	if m.linkType == "file" {
 		dl.TotalBytes = root.Size
 		files = append(files, db.File{
@@ -493,6 +494,7 @@ func (m *addlinkModel) enqueue(rawName string) error {
 		// file pane
 		dl.Selection = root.Handle
 		files = listingFiles(dl.DestPath, m.nodes)
+		dirs = listingDirectories(dl.DestPath, m.nodes)
 		for i := range files {
 			files[i].Queued = true
 			dl.TotalBytes += files[i].Size
@@ -500,9 +502,14 @@ func (m *addlinkModel) enqueue(rawName string) error {
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			return err
 		}
+		for _, dir := range dirs {
+			if err := os.MkdirAll(dir.LocalPath, 0o755); err != nil {
+				return err
+			}
+		}
 	}
 
-	id, err := m.app.db.InsertDownload(dl, files)
+	id, err := m.app.db.InsertDownloadListing(dl, files, dirs)
 	if err != nil {
 		return err
 	}
@@ -533,6 +540,30 @@ func listingFiles(destPath string, nodes []mega.Node) []db.File {
 			RemotePath: n.Path,
 			LocalPath:  filepath.Join(destPath, filepath.FromSlash(rel)),
 			Size:       n.Size,
+		})
+	}
+	return out
+}
+
+// listingDirectories maps folder nodes below the link root onto persistent
+// directory rows. The root itself is Download.DestPath and does not need a
+// tree row of its own.
+func listingDirectories(destPath string, nodes []mega.Node) []db.Directory {
+	rootPath := nodes[0].Path
+	var out []db.Directory
+	for _, n := range nodes {
+		if !n.IsDir() || n.Path == rootPath {
+			continue
+		}
+		rel := strings.TrimPrefix(n.Path, rootPath)
+		rel = strings.TrimPrefix(rel, "/")
+		if rel == "" {
+			continue
+		}
+		out = append(out, db.Directory{
+			NodeHandle: n.Handle,
+			RemotePath: n.Path,
+			LocalPath:  filepath.Join(destPath, filepath.FromSlash(rel)),
 		})
 	}
 	return out

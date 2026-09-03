@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -45,6 +46,7 @@ type downloadsModel struct {
 
 	pane     paneID
 	files    []db.File
+	dirs     []db.Directory
 	filesFor int64 // download ID the file pane is showing
 	// tree is what the file pane draws: directory headers interleaved with the
 	// files under them. The cursor indexes it rather than files, so a folder is
@@ -53,7 +55,7 @@ type downloadsModel struct {
 	treeCursor int
 	treeScroll int
 	// cursorDir is the path of the directory the cursor is on, empty when it is
-	// on a file. Directories have no row of their own, so this is what puts the
+	// on a file. Directory rows do not carry selection state, so this puts the
 	// cursor back when a reload rebuilds the tree; it is recorded against the
 	// download as SelectedDir, the way a file is as SelectedFileID, so a folder
 	// keeps the cursor across downloads and across restarts too.
@@ -103,8 +105,9 @@ type downloadsModel struct {
 
 // listingMergedMsg reports a finished remote-listing refresh.
 type listingMergedMsg struct {
-	added int
-	err   error
+	addedFiles int
+	addedDirs  int
+	err        error
 }
 
 // fileOpenedMsg reports the result of spawning a player for a file.
@@ -138,7 +141,7 @@ func (m *downloadsModel) restore() {
 		if dl.ID == id {
 			m.cursor, m.savedDownload = i, id
 			m.loadFiles()
-			if selected, err := m.app.db.FilesPaneSelected(); err == nil && selected && len(m.files) > 0 {
+			if selected, err := m.app.db.FilesPaneSelected(); err == nil && selected && m.hasFilePane() {
 				m.pane = paneFiles
 			}
 			m.savedPane = m.pane
@@ -238,7 +241,7 @@ func (m *downloadsModel) selectNewDownload(id int64) {
 // loadFiles refreshes the file pane for the download under the cursor.
 func (m *downloadsModel) loadFiles() {
 	if len(m.rows) == 0 {
-		m.files, m.tree, m.filesFor, m.partials = nil, nil, 0, nil
+		m.files, m.dirs, m.tree, m.filesFor, m.partials = nil, nil, nil, 0, nil
 		m.pane = paneList
 		return
 	}
@@ -249,13 +252,17 @@ func (m *downloadsModel) loadFiles() {
 	if err != nil {
 		return
 	}
+	dirs, err := m.app.db.Directories(dl.ID)
+	if err != nil {
+		return
+	}
 	if changedDownload {
 		// the incoming download's own remembered row, folder included
 		m.treeCursor, m.treeScroll, m.cursorDir = 0, 0, dl.SelectedDir
 	}
-	m.setFiles(dl, files)
+	m.setListing(dl, files, dirs)
 	m.focusRow(dl.SelectedFileID)
-	if len(m.files) == 0 {
+	if !m.hasFilePane() {
 		m.pane = paneList
 	}
 }
@@ -264,9 +271,23 @@ func (m *downloadsModel) loadFiles() {
 // headers the pane draws them in, and the partial sizes their progress bars
 // read.
 func (m *downloadsModel) setFiles(dl *db.Download, files []db.File) {
-	m.filesFor, m.files = dl.ID, files
-	m.tree = fileTreeRows(files, dl.DestPath)
+	m.setListing(dl, files, nil)
+}
+
+// setListing also includes explicit directory nodes, which are necessary for
+// folders that have no file below them.
+func (m *downloadsModel) setListing(dl *db.Download, files []db.File, dirs []db.Directory) {
+	m.filesFor, m.files, m.dirs = dl.ID, files, dirs
+	m.tree = listingTreeRows(files, dirs, dl.DestPath)
 	m.partials = partialSizes(files)
+}
+
+// hasFilePane reports whether the selected download has a meaningful detail
+// pane. Folder links keep it even when the root is completely empty, so its
+// title and zero-file count do not disappear as the selection moves.
+func (m *downloadsModel) hasFilePane() bool {
+	return len(m.tree) > 0 ||
+		(m.cursor < len(m.rows) && m.rows[m.cursor].LinkType == "folder")
 }
 
 // focusRow puts the cursor back where the pane was once the tree is rebuilt:
@@ -405,7 +426,8 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 			m.setNotice("refresh failed: " + res.err.Error())
 		} else {
 			m.reload()
-			m.setNotice(fmt.Sprintf("listing refreshed — %d new file(s)", res.added))
+			m.setNotice(fmt.Sprintf("listing refreshed — %d new file(s), %d new folder(s)",
+				res.addedFiles, res.addedDirs))
 		}
 		return nil
 	}
@@ -532,7 +554,7 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 	case "enter":
 		return m.openSelectedDownload()
 	case "right", "l":
-		if len(m.files) > 0 {
+		if m.hasFilePane() {
 			m.pane = paneFiles
 		}
 	case "r":
@@ -791,7 +813,7 @@ func (m *downloadsModel) clickDownload(y int) {
 	double := m.clicks.press(clickDownload, i)
 	m.selectRow(i)
 	if double {
-		if len(m.files) > 0 {
+		if m.hasFilePane() {
 			m.pane = paneFiles
 		}
 	}
@@ -904,8 +926,9 @@ func (m *downloadsModel) refreshListing() tea.Cmd {
 		if err != nil {
 			return listingMergedMsg{err: err}
 		}
-		added, err := database.MergeFiles(dl.ID, listingFiles(dl.DestPath, nodes))
-		return listingMergedMsg{added: added, err: err}
+		addedFiles, addedDirs, err := database.MergeListing(dl.ID,
+			listingFiles(dl.DestPath, nodes), listingDirectories(dl.DestPath, nodes))
+		return listingMergedMsg{addedFiles: addedFiles, addedDirs: addedDirs, err: err}
 	}
 }
 
@@ -1162,7 +1185,7 @@ func (m *downloadsModel) view(width, height int) string {
 
 	// The panes own the whole body: notices, the transfer strip and the
 	// shortcuts all live under the footer's divider.
-	listW, filesW := downloadPaneWidths(width, len(m.files) > 0)
+	listW, filesW := downloadPaneWidths(width, m.hasFilePane())
 	if filesW == 0 {
 		m.pane = paneList // pane hidden (narrow terminal) — focus can't live there
 	}
@@ -1177,9 +1200,9 @@ func (m *downloadsModel) view(width, height int) string {
 		m.filesView(filesW, height))
 }
 
-func downloadPaneWidths(width int, hasFiles bool) (listW, filesW int) {
+func downloadPaneWidths(width int, hasDetails bool) (listW, filesW int) {
 	listW = width
-	if hasFiles && width > 60 {
+	if hasDetails && width > 60 {
 		listW = min(44, max(28, width*35/100))
 		filesW = width - listW // includes the "│" divider column
 	}
@@ -1240,29 +1263,76 @@ type fileTreeRow struct {
 // Files arrive sorted by remote path, so each directory is a contiguous
 // block and a header is emitted where the directory prefix changes.
 func fileTreeRows(files []db.File, destPath string) []fileTreeRow {
-	var rows []fileTreeRow
-	var open []string // directory components currently open
+	return listingTreeRows(files, nil, destPath)
+}
+
+// listingTreeRows merges explicit folders with the folders implied by file
+// paths. Directory items sort with a trailing separator, like the remote
+// listing, so an empty folder keeps its natural place among files and other
+// folders.
+func listingTreeRows(files []db.File, dirs []db.Directory, destPath string) []fileTreeRow {
+	type item struct {
+		parts []string
+		dir   bool
+		file  int
+		key   string
+	}
+	var items []item
+	for _, dir := range dirs {
+		parts := treePathParts(dir.LocalPath, destPath)
+		if len(parts) == 0 {
+			continue
+		}
+		items = append(items, item{parts: parts, dir: true,
+			key: strings.Join(parts, string(filepath.Separator)) + string(filepath.Separator)})
+	}
 	for i, f := range files {
-		rel := strings.TrimPrefix(f.LocalPath, destPath)
-		rel = strings.TrimPrefix(rel, string(filepath.Separator))
-		dirs := strings.Split(rel, string(filepath.Separator))
-		dirs = dirs[:len(dirs)-1] // last component is the file itself
-		common := 0
-		for common < len(open) && common < len(dirs) && open[common] == dirs[common] {
-			common++
+		parts := treePathParts(f.LocalPath, destPath)
+		if len(parts) == 0 {
+			// Some focused view tests use a file without a path. It is still a
+			// top-level file row, as it was before directories were persistent.
+			parts = []string{""}
 		}
-		open = open[:common]
-		for _, d := range dirs[common:] {
-			open = append(open, d)
-			rows = append(rows, fileTreeRow{
-				dir:   d,
-				path:  strings.Join(open, string(filepath.Separator)),
-				depth: len(open) - 1,
-			})
+		items = append(items, item{parts: parts, file: i,
+			key: strings.Join(parts, string(filepath.Separator))})
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].key < items[j].key })
+
+	var rows []fileTreeRow
+	emitted := make(map[string]bool)
+	for _, item := range items {
+		dirParts := item.parts
+		if !item.dir {
+			dirParts = dirParts[:len(dirParts)-1]
 		}
-		rows = append(rows, fileTreeRow{file: i, depth: len(open)})
+		for i, name := range dirParts {
+			path := strings.Join(dirParts[:i+1], string(filepath.Separator))
+			if emitted[path] {
+				continue
+			}
+			emitted[path] = true
+			rows = append(rows, fileTreeRow{dir: name, path: path, depth: i})
+		}
+		if !item.dir {
+			rows = append(rows, fileTreeRow{file: item.file, depth: len(dirParts)})
+		}
 	}
 	return rows
+}
+
+func treePathParts(localPath, destPath string) []string {
+	rel := strings.TrimPrefix(localPath, destPath)
+	rel = strings.TrimPrefix(rel, string(filepath.Separator))
+	if rel == "" || rel == "." {
+		return nil
+	}
+	var parts []string
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part != "" && part != "." {
+			parts = append(parts, part)
+		}
+	}
+	return parts
 }
 
 // subtreeFiles returns the indices into files of everything tree row i covers:

@@ -333,7 +333,7 @@ func (a *App) headerView() string {
 // between the two panes through as a junction, so the rules top and bottom meet
 // the gutter that runs between them.
 func (a *App) paneRule(junction string) string {
-	listW, filesW := downloadPaneWidths(a.width, len(a.downloads.files) > 0)
+	listW, filesW := downloadPaneWidths(a.width, a.downloads.hasFilePane())
 	if filesW <= 0 {
 		return styleDim.Render(strings.Repeat("─", max(1, a.width)))
 	}

@@ -488,6 +488,46 @@ func TestFileTreeRows(t *testing.T) {
 	}
 }
 
+func TestListingTreeRowsIncludesEmptyDirectories(t *testing.T) {
+	dest := "/dl/Show"
+	files := []db.File{{LocalPath: "/dl/Show/Season 01/e1.mkv"}}
+	dirs := []db.Directory{
+		{LocalPath: "/dl/Show/Empty"},
+		{LocalPath: "/dl/Show/Season 01"},
+		{LocalPath: "/dl/Show/Season 01/Extras"},
+	}
+
+	got := listingTreeRows(files, dirs, dest)
+	want := []fileTreeRow{
+		{dir: "Empty", path: "Empty", depth: 0},
+		{dir: "Season 01", path: "Season 01", depth: 0},
+		{dir: "Extras", path: "Season 01/Extras", depth: 1},
+		{file: 0, depth: 1},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("listingTreeRows() = %+v, want %+v", got, want)
+	}
+}
+
+func TestEmptyFolderLinkKeepsFilePane(t *testing.T) {
+	app, database := openAddlinkTestApp(t)
+	if _, err := database.InsertDownload(&db.Download{
+		URL: "u", Handle: "root", LinkType: "folder", Name: "Empty",
+		DestPath: "/dl/Empty",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	app.downloads.reload()
+
+	view := ansi.Strip(app.downloads.view(100, 6))
+	if app.downloads.filesW == 0 {
+		t.Fatalf("file pane collapsed for an empty folder link:\n%s", view)
+	}
+	if !strings.Contains(view, "0/0 files") {
+		t.Fatalf("empty folder title is missing its file count:\n%s", view)
+	}
+}
+
 func TestFilesViewRendersDirectoryTree(t *testing.T) {
 	dl := &db.Download{ID: 7, Name: "Skins", DestPath: "/dl/Skins",
 		Status: db.StatusDone, TotalBytes: 100}
@@ -1138,8 +1178,8 @@ func TestJKKeysMoveBetweenSiblings(t *testing.T) {
 }
 
 // A folder holds the cursor the way a file does: across a restart, and across
-// a trip to another download and back. It has no row of its own, so the
-// download remembers the path.
+// a trip to another download and back. Its listing row carries no selection
+// state, so the download remembers the path.
 func TestFolderSelectionIsRestoredInANewSession(t *testing.T) {
 	app, database, _ := folderTreeApp(t)
 	m := &app.downloads
@@ -1168,8 +1208,8 @@ func TestFolderSelectionIsRestoredInANewSession(t *testing.T) {
 	}
 }
 
-// The cursor is on a folder, which has no database row to remember it by, so
-// the reloads that follow every engine event have to put it back themselves —
+// The cursor is on a folder, whose database row has no selection state, so the
+// reloads that follow every engine event have to put it back by path —
 // even when the listing grew rows above it in the meantime.
 func TestFolderStaysFocusedAcrossReloads(t *testing.T) {
 	app, database, id := folderTreeApp(t)

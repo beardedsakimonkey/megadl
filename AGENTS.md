@@ -48,8 +48,8 @@ MEGA protocol implementation (no external downloader).
   wide or the name columns shift.
 - The file pane's cursor indexes tree rows, not files, so directory headers are
   focusable: space on one queues or dequeues every fetchable file beneath it, and
-  a folder has no database row to remember it by — `cursorDir` is what survives
-  the reload that follows every engine event.
+  `download_dirs` keeps empty folders visible. Folder selection is stored by
+  path in `cursorDir`, which survives the reload that follows every engine event.
 - `link_history` is the add-link prompt's history and is deliberately unrelated
   to `downloads`: no foreign key, so deleting a download leaves the link that
   produced it behind. Re-submitting a link moves its row rather than adding a

@@ -340,6 +340,37 @@ func TestMergeFiles(t *testing.T) {
 	}
 }
 
+func TestInsertAndMergeDirectories(t *testing.T) {
+	d := openTest(t)
+	id, err := d.InsertDownloadListing(&Download{
+		URL: "u", Handle: "root", LinkType: "folder", Name: "n", DestPath: "/x/n",
+	}, nil, []Directory{{
+		NodeHandle: "a", RemotePath: "/n/a", LocalPath: "/x/n/a",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addedFiles, addedDirs, err := d.MergeListing(id, nil, []Directory{
+		{NodeHandle: "a", RemotePath: "/n/a", LocalPath: "/x/n/a"},
+		{NodeHandle: "b", RemotePath: "/n/b", LocalPath: "/x/n/b"},
+	})
+	if err != nil || addedFiles != 0 || addedDirs != 1 {
+		t.Fatalf("MergeListing = files %d, dirs %d, %v", addedFiles, addedDirs, err)
+	}
+	dirs, err := d.Directories(id)
+	if err != nil || len(dirs) != 2 || dirs[0].NodeHandle != "a" || dirs[1].NodeHandle != "b" {
+		t.Fatalf("directories = %+v, %v", dirs, err)
+	}
+
+	if err := d.DeleteDownload(id); err != nil {
+		t.Fatal(err)
+	}
+	if dirs, err = d.Directories(id); err != nil || len(dirs) != 0 {
+		t.Fatalf("directories after cascade = %+v, %v", dirs, err)
+	}
+}
+
 func TestMigrationAddsQueuedColumn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	raw, err := sql.Open("sqlite", path)

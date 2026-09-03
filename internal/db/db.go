@@ -50,6 +50,19 @@ CREATE TABLE IF NOT EXISTS download_files (
 );
 CREATE INDEX IF NOT EXISTS idx_files_download ON download_files(download_id);
 
+-- Folder nodes need records of their own. The file pane can derive a folder
+-- from a file below it, but an empty folder has no file path to derive it
+-- from.
+CREATE TABLE IF NOT EXISTS download_dirs (
+  id          INTEGER PRIMARY KEY,
+  download_id INTEGER NOT NULL REFERENCES downloads(id) ON DELETE CASCADE,
+  node_handle TEXT NOT NULL,
+  remote_path TEXT NOT NULL,
+  local_path  TEXT NOT NULL,
+  UNIQUE (download_id, node_handle)
+);
+CREATE INDEX IF NOT EXISTS idx_dirs_download ON download_dirs(download_id);
+
 CREATE TABLE IF NOT EXISTS transfer_log (
   id    INTEGER PRIMARY KEY,
   ts    INTEGER NOT NULL,
@@ -118,8 +131,8 @@ type Download struct {
 	Selection      string // comma-joined selected node handles
 	SelectedFileID int64  // file the TUI last highlighted here; 0 if none
 	// SelectedDir is the folder the TUI last highlighted here, relative to
-	// DestPath; empty when the cursor was on a file. Folders have no row of
-	// their own, so the selection is recorded against the download.
+	// DestPath; empty when the cursor was on a file. Folder selection uses its
+	// path because directory rows do not carry selection state.
 	SelectedDir string
 
 	Status      string
@@ -140,6 +153,17 @@ type File struct {
 	Size       int64
 	Status     string
 	Queued     bool // in the download queue; false = user removed it
+}
+
+// Directory is one folder below a folder link's root. It has no queue state:
+// directories are displayed in the file tree, while files remain the units
+// of download work.
+type Directory struct {
+	ID         int64
+	DownloadID int64
+	NodeHandle string
+	RemotePath string
+	LocalPath  string
 }
 
 // LinkEntry is a link that was added, with the name it went in under. The
@@ -232,8 +256,16 @@ func Open(path string) (*DB, error) {
 
 func (d *DB) Close() error { return d.sql.Close() }
 
-// InsertDownload creates the download plus its file rows.
+// InsertDownload creates the download plus its file rows. Call
+// InsertDownloadListing when the remote listing also has directory rows.
 func (d *DB) InsertDownload(dl *Download, files []File) (int64, error) {
+	return d.InsertDownloadListing(dl, files, nil)
+}
+
+// InsertDownloadListing creates a download and all persistent rows from its
+// remote listing. Directories are separate from files because they do not
+// belong in the download queue.
+func (d *DB) InsertDownloadListing(dl *Download, files []File, dirs []Directory) (int64, error) {
 	tx, err := d.sql.Begin()
 	if err != nil {
 		return 0, err
@@ -258,6 +290,14 @@ func (d *DB) InsertDownload(dl *Download, files []File) (int64, error) {
 			(download_id, node_handle, remote_path, local_path, size, queued)
 			VALUES (?,?,?,?,?,?)`,
 			id, f.NodeHandle, f.RemotePath, f.LocalPath, f.Size, f.Queued); err != nil {
+			return 0, err
+		}
+	}
+	for _, dir := range dirs {
+		if _, err := tx.Exec(`INSERT INTO download_dirs
+			(download_id, node_handle, remote_path, local_path)
+			VALUES (?,?,?,?)`,
+			id, dir.NodeHandle, dir.RemotePath, dir.LocalPath); err != nil {
 			return 0, err
 		}
 	}
@@ -304,13 +344,20 @@ func (d *DB) LinkHistory() ([]LinkEntry, error) {
 // outside the queue, so remote files added after enqueueing become visible
 // without downloading themselves. Returns how many rows were added.
 func (d *DB) MergeFiles(downloadID int64, files []File) (int, error) {
+	added, _, err := d.MergeListing(downloadID, files, nil)
+	return added, err
+}
+
+// MergeListing inserts file and directory nodes not tracked yet. New files
+// stay outside the queue; directories have no queue state.
+func (d *DB) MergeListing(downloadID int64, files []File, dirs []Directory) (int, int, error) {
 	tx, err := d.sql.Begin()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer tx.Rollback()
 
-	added := 0
+	addedFiles := 0
 	for _, f := range files {
 		res, err := tx.Exec(`INSERT INTO download_files
 			(download_id, node_handle, remote_path, local_path, size, queued)
@@ -320,13 +367,29 @@ func (d *DB) MergeFiles(downloadID int64, files []File) (int, error) {
 			downloadID, f.NodeHandle, f.RemotePath, f.LocalPath, f.Size,
 			downloadID, f.NodeHandle)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		if n, err := res.RowsAffected(); err == nil {
-			added += int(n)
+			addedFiles += int(n)
 		}
 	}
-	return added, tx.Commit()
+	addedDirs := 0
+	for _, dir := range dirs {
+		res, err := tx.Exec(`INSERT INTO download_dirs
+			(download_id, node_handle, remote_path, local_path)
+			SELECT ?,?,?,?
+			WHERE NOT EXISTS (SELECT 1 FROM download_dirs
+				WHERE download_id = ? AND node_handle = ?)`,
+			downloadID, dir.NodeHandle, dir.RemotePath, dir.LocalPath,
+			downloadID, dir.NodeHandle)
+		if err != nil {
+			return 0, 0, err
+		}
+		if n, err := res.RowsAffected(); err == nil {
+			addedDirs += int(n)
+		}
+	}
+	return addedFiles, addedDirs, tx.Commit()
 }
 
 func scanDownload(row interface{ Scan(...any) error }) (*Download, error) {
@@ -571,6 +634,36 @@ func (d *DB) rebaseDownload(id int64, name, oldDestPath, newDestPath string) err
 			return err
 		}
 	}
+	rows, err = tx.Query(`SELECT id, local_path FROM download_dirs WHERE download_id = ?`, id)
+	if err != nil {
+		return err
+	}
+	var dirs []localFile
+	for rows.Next() {
+		var dir localFile
+		if err := rows.Scan(&dir.id, &dir.path); err != nil {
+			rows.Close()
+			return err
+		}
+		dirs = append(dirs, dir)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, dir := range dirs {
+		rel, err := filepath.Rel(oldDestPath, dir.path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("directory path %q is outside download destination %q", dir.path, oldDestPath)
+		}
+		if _, err := tx.Exec(`UPDATE download_dirs SET local_path = ? WHERE id = ?`,
+			filepath.Join(newDestPath, rel), dir.id); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(`UPDATE downloads SET dest_path = ? WHERE id = ?`, newDestPath, id); err != nil {
 		return err
 	}
@@ -657,6 +750,29 @@ func (d *DB) Files(downloadID int64) ([]File, error) {
 			return nil, err
 		}
 		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+const directoryCols = `id, download_id, node_handle, remote_path, local_path`
+
+// Directories returns the folders below a folder link's root in remote path
+// order. The root itself is represented by Download.DestPath.
+func (d *DB) Directories(downloadID int64) ([]Directory, error) {
+	rows, err := d.sql.Query(`SELECT `+directoryCols+`
+		FROM download_dirs WHERE download_id = ? ORDER BY remote_path`, downloadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Directory
+	for rows.Next() {
+		var dir Directory
+		if err := rows.Scan(&dir.ID, &dir.DownloadID, &dir.NodeHandle,
+			&dir.RemotePath, &dir.LocalPath); err != nil {
+			return nil, err
+		}
+		out = append(out, dir)
 	}
 	return out, rows.Err()
 }
