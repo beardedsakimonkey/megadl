@@ -565,7 +565,7 @@ func TestFilesViewRendersDirectoryTree(t *testing.T) {
 	if !strings.HasPrefix(file, "│"+cursorLevels[cursorThin-1]+"   "+queuedGlyph+" ") {
 		t.Fatalf("file row is not indented under its folder: %q", file)
 	}
-	if !strings.HasPrefix(header, "│  Season 01/") {
+	if !strings.HasPrefix(header, "│  ▾ Season 01/") {
 		t.Fatalf("folder header misrendered: %q", header)
 	}
 	if len(lines) != 10 {
