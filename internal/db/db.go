@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS download_dirs (
 );
 CREATE INDEX IF NOT EXISTS idx_dirs_download ON download_dirs(download_id);
 
+-- Relative paths keep folds valid when a download's destination is renamed.
+-- CREATE IF NOT EXISTS also adds this table to existing libraries.
+CREATE TABLE IF NOT EXISTS collapsed_dirs (
+  download_id INTEGER NOT NULL REFERENCES downloads(id) ON DELETE CASCADE,
+  path        TEXT NOT NULL,
+  PRIMARY KEY (download_id, path)
+);
+
 CREATE TABLE IF NOT EXISTS transfer_log (
   id    INTEGER PRIMARY KEY,
   ts    INTEGER NOT NULL,

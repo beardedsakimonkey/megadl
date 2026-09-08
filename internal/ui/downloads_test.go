@@ -648,7 +648,7 @@ func playerModel(t *testing.T, files []db.File) (*downloadsModel, *[]string) {
 	opened := &[]string{}
 	m := &downloadsModel{
 		pane: paneFiles,
-		openFile: func(paths []string) (func() error, error) {
+		openFile: func(paths []string, shuffle bool) (func() error, error) {
 			*opened = append(*opened, paths...)
 			return nil, nil
 		},
@@ -902,7 +902,7 @@ func TestEnterReportsPlayerSpawnFailure(t *testing.T) {
 	}
 	m := &downloadsModel{
 		pane: paneFiles,
-		openFile: func([]string) (func() error, error) {
+		openFile: func([]string, bool) (func() error, error) {
 			return nil, errors.New("mpv executable not found")
 		},
 	}
@@ -927,7 +927,7 @@ func TestEnterReportsPlayerExitFailure(t *testing.T) {
 	}
 	m := &downloadsModel{
 		pane: paneFiles,
-		openFile: func([]string) (func() error, error) {
+		openFile: func([]string, bool) (func() error, error) {
 			return func() error { return errors.New("exit status 2") }, nil
 		},
 	}
@@ -1254,7 +1254,7 @@ func TestEnterOnFolderPlaysItsFirstFile(t *testing.T) {
 	opened := &[]string{}
 	m := &downloadsModel{
 		pane: paneFiles,
-		openFile: func(paths []string) (func() error, error) {
+		openFile: func(paths []string, shuffle bool) (func() error, error) {
 			*opened = append(*opened, paths...)
 			return nil, nil
 		},

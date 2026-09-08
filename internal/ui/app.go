@@ -165,6 +165,9 @@ func isPaste(key tea.KeyMsg) bool {
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case foldsSavedMsg:
+		return a, a.downloads.foldsSaved(msg)
+
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
 		return a, nil
@@ -254,7 +257,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch key.String() {
 		case "q", "ctrl+c":
-			return a, tea.Quit
+			return a, a.downloads.quitAfterFolds()
 		case "a":
 			openCmd := a.setAddlink(newAddlinkModel(a))
 			return a, tea.Batch(openCmd, a.addlink.init())

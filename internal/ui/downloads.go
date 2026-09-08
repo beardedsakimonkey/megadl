@@ -51,11 +51,14 @@ type downloadsModel struct {
 	// tree is what the file pane draws: directory headers interleaved with the
 	// files under them. The cursor indexes it rather than files, so a folder is
 	// focusable in its own right. setFiles rebuilds both together.
-	tree       []fileTreeRow
-	fullTree   []fileTreeRow             // includes descendants hidden by collapsed folders
-	collapsed  map[int64]map[string]bool // download ID -> relative folder paths
-	treeCursor int
-	treeScroll int
+	tree         []fileTreeRow
+	fullTree     []fileTreeRow             // includes descendants hidden by collapsed folders
+	collapsed    map[int64]map[string]bool // download ID -> relative folder paths
+	foldDirty    map[int64]bool
+	foldSaving   bool
+	foldQuitting bool
+	treeCursor   int
+	treeScroll   int
 	// cursorDir is the path of the directory the cursor is on, empty when it is
 	// on a file. Directory rows do not carry selection state, so this puts the
 	// cursor back when a reload rebuilds the tree; it is recorded against the
@@ -102,7 +105,7 @@ type downloadsModel struct {
 	// openFile starts a downloaded file plus any queued playlist entries and
 	// returns a function that waits for the player to exit. nil means
 	// openInMPV. Test seam so tests never spawn a real player.
-	openFile func(paths []string) (wait func() error, err error)
+	openFile func(paths []string, shuffle bool) (wait func() error, err error)
 }
 
 // listingMergedMsg reports a finished remote-listing refresh.
@@ -134,6 +137,11 @@ func newDownloadsModel(app *App) downloadsModel {
 // selected; its file cursor follows from the download's own recorded
 // selection. An unknown or removed download falls back to the top of the list.
 func (m *downloadsModel) restore() {
+	if folders, err := m.app.db.CollapsedDirs(); err == nil {
+		m.collapsed = folders
+	} else {
+		m.setNoticeErr("load folder state failed: " + err.Error())
+	}
 	m.reload()
 	id, err := m.app.db.SelectedDownload()
 	if err != nil || id == 0 {
@@ -321,6 +329,7 @@ func (m *downloadsModel) toggleCollapsed() {
 	} else {
 		folders[row.path] = true
 	}
+	m.markFoldsDirty()
 	m.rebuildTree()
 }
 
@@ -355,6 +364,7 @@ func (m *downloadsModel) revealFile(file db.File) {
 	for path := range folders {
 		if strings.HasPrefix(rel, path+string(filepath.Separator)) {
 			delete(folders, path)
+			m.markFoldsDirty()
 		}
 	}
 	m.rebuildTree()
@@ -483,7 +493,7 @@ func (m *downloadsModel) update(msg tea.Msg) tea.Cmd {
 		cmd = tea.Batch(cmd, m.startCursorAnim(widths, now))
 	}
 	m.rememberSelection()
-	return cmd
+	return tea.Batch(cmd, m.saveFolds())
 }
 
 // setNotice shows text in the footer's notice line, styled as an ordinary
@@ -600,8 +610,8 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 			m.toggleCollapsed()
 		case " ":
 			m.toggleRow()
-		case "enter":
-			return m.openSelectedFile()
+		case "enter", "s":
+			return m.openSelectedFile(key.String() == "s")
 		case "r":
 			return m.startRename()
 		case "left", "h":
@@ -631,8 +641,8 @@ func (m *downloadsModel) handle(msg tea.Msg) tea.Cmd {
 		m.moveCursor(len(m.rows))
 	case " ":
 		m.toggleDownload()
-	case "enter":
-		return m.openSelectedDownload()
+	case "enter", "s":
+		return m.openSelectedDownload(key.String() == "s")
 	case "right", "l":
 		if m.hasFilePane() {
 			m.pane = paneFiles
@@ -913,7 +923,7 @@ func (m *downloadsModel) clickFile(y int) tea.Cmd {
 	double := m.clicks.press(clickFile, i)
 	m.selectTreeRow(i)
 	if double && m.tree[i].dir == "" {
-		return m.openSelectedFile()
+		return m.openSelectedFile(false)
 	}
 	return nil
 }
@@ -1019,26 +1029,29 @@ func (m *downloadsModel) refreshListing() tea.Cmd {
 // — or, on a directory header, the first playable file inside it. Later media
 // files sitting in the same directory are queued behind it so a folder of
 // episodes keeps playing; see playlistTail.
-func (m *downloadsModel) openSelectedFile() tea.Cmd {
+func (m *downloadsModel) openSelectedFile(shuffle bool) tea.Cmd {
 	if i := m.cursorFile(); i >= 0 {
-		return m.playFrom(i)
+		return m.playFrom(i, shuffle)
 	}
-	return m.playFirst(m.rowFiles(m.treeCursor))
+	return m.playFirst(m.rowFiles(m.treeCursor), shuffle)
 }
 
 // openSelectedDownload plays the whole selected download: playback starts at
 // its first playable file and the rest of that file's folder is queued behind
 // it, so enter on a list row plays a folder without picking a file first.
-func (m *downloadsModel) openSelectedDownload() tea.Cmd {
+func (m *downloadsModel) openSelectedDownload(shuffle bool) tea.Cmd {
 	all := make([]int, len(m.files))
 	for i := range m.files {
 		all[i] = i
 	}
-	return m.playFirst(all)
+	return m.playFirst(all, shuffle)
 }
 
 // playFirst starts playback at the first of the given files that is playable.
-func (m *downloadsModel) playFirst(idx []int) tea.Cmd {
+func (m *downloadsModel) playFirst(idx []int, shuffle bool) tea.Cmd {
+	if shuffle {
+		return m.shuffleFiles(idx)
+	}
 	for _, i := range idx {
 		f := m.files[i]
 		if !isMediaFile(f.LocalPath) {
@@ -1046,16 +1059,58 @@ func (m *downloadsModel) playFirst(idx []int) tea.Cmd {
 		}
 		// a partial is playable too: it holds plaintext from byte zero
 		if f.Status == db.FileDone || f.Status == db.FileSkipped || m.partials[f.ID] > 0 {
-			return m.playFrom(i)
+			return m.playFrom(i, shuffle)
 		}
 	}
 	m.setNotice("nothing to play is on disk yet")
 	return nil
 }
 
+// shuffleFiles includes media from every descendant of the selected folder
+// or download, including files hidden by folded folders.
+func (m *downloadsModel) shuffleFiles(idx []int) tea.Cmd {
+	var candidates []string
+	for _, i := range idx {
+		f := m.files[i]
+		if !isMediaFile(f.LocalPath) {
+			continue
+		}
+		path := f.LocalPath
+		if f.Status != db.FileDone && f.Status != db.FileSkipped {
+			if m.partials[f.ID] <= 0 {
+				continue
+			}
+			path = filepath.Join(filepath.Dir(path), ".megatmp."+f.NodeHandle)
+		}
+		candidates = append(candidates, path)
+	}
+	open := m.openFile
+	if open == nil {
+		open = openInMPV
+	}
+	return func() tea.Msg {
+		var paths []string
+		for _, path := range candidates {
+			if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+				paths = append(paths, path)
+			}
+		}
+		if len(paths) == 0 {
+			return fileOpenedMsg{err: errors.New("nothing to play is on disk yet")}
+		}
+		wait, err := open(paths, true)
+		return fileOpenedMsg{
+			name:   "shuffled playlist",
+			queued: len(paths) - 1,
+			wait:   wait,
+			err:    err,
+		}
+	}
+}
+
 // playFrom plays files[i], with the media files after it queued behind; see
 // playlistTail.
-func (m *downloadsModel) playFrom(i int) tea.Cmd {
+func (m *downloadsModel) playFrom(i int, shuffle bool) tea.Cmd {
 	if i < 0 || i >= len(m.files) {
 		return nil
 	}
@@ -1075,7 +1130,7 @@ func (m *downloadsModel) playFrom(i int) tea.Cmd {
 		if _, err := os.Stat(path); err != nil {
 			return fileOpenedMsg{err: errors.New(name + " is not on disk yet")}
 		}
-		wait, err := open(append([]string{path}, queued...))
+		wait, err := open(append([]string{path}, queued...), shuffle)
 		return fileOpenedMsg{
 			name:   name,
 			queued: len(queued),
@@ -1130,12 +1185,18 @@ func isMediaFile(path string) bool {
 // LaunchServices (`open -a`) adds seconds of startup latency — and puts it in
 // its own session with no stdio, so the TUI keeps the terminal and playback
 // survives megadl exiting or receiving ctrl+c.
-func openInMPV(paths []string) (func() error, error) {
+func openInMPV(paths []string, shuffle bool) (func() error, error) {
 	bin := findMPV()
 	if bin == "" {
 		return nil, errors.New("mpv executable not found")
 	}
-	cmd := exec.Command(bin, paths...)
+	args := []string{}
+	if shuffle {
+		args = append(args, "--shuffle")
+	}
+	args = append(args, "--")
+	args = append(args, paths...)
+	cmd := exec.Command(bin, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return nil, err
@@ -1188,6 +1249,7 @@ func (m *downloadsModel) help() string {
 			shortcut{keys: []string{"a"}, label: "add"},
 			shortcut{keys: []string{"space"}, label: m.toggleLabel()},
 			shortcut{keys: []string{"⏎"}, label: "open"},
+			shortcut{keys: []string{"s"}, label: "shuffle"},
 			shortcut{keys: []string{"p"}, label: m.pauseLabel()},
 			shortcut{keys: []string{"f"}, label: "focus"},
 			shortcut{keys: []string{"J/K"}, label: "folder"},
@@ -1204,6 +1266,7 @@ func (m *downloadsModel) help() string {
 		shortcut{keys: []string{"a"}, label: "add"},
 		shortcut{keys: []string{"space"}, label: m.toggleLabel()},
 		shortcut{keys: []string{"⏎"}, label: "open"},
+		shortcut{keys: []string{"s"}, label: "shuffle"},
 		shortcut{keys: []string{"p"}, label: m.pauseLabel()},
 		shortcut{keys: []string{"f"}, label: "focus"},
 		shortcut{keys: []string{"r"}, label: "rename"},

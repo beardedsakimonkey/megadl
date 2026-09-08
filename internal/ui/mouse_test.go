@@ -183,7 +183,7 @@ func filePaneModel(t *testing.T, dir string) (*downloadsModel, *[]string) {
 	m := &downloadsModel{
 		app:  app,
 		rows: []*db.Download{dl},
-		openFile: func(paths []string) (func() error, error) {
+		openFile: func(paths []string, shuffle bool) (func() error, error) {
 			*opened = append(*opened, paths...)
 			return nil, nil
 		},

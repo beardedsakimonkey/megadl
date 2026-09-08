@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -132,5 +133,80 @@ func TestTabTogglesEmptyFolder(t *testing.T) {
 	m.toggleCollapsed()
 	if len(m.tree) != 1 || m.collapsed[1]["empty"] {
 		t.Fatal("empty folder did not expand")
+	}
+}
+
+func TestFoldSavesSerializeAndQuitWaits(t *testing.T) {
+	app, database, id := folderTreeApp(t)
+	m := &app.downloads
+	m.treeCursor = 1 // Extras
+	_, firstSave := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.treeCursor = 0
+	_, next := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if next != nil {
+		t.Fatal("second save started before first completed")
+	}
+	_, quit := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if quit != nil {
+		t.Fatal("quit before pending save completed")
+	}
+	_, secondSave := app.Update(firstSave())
+	if secondSave == nil {
+		t.Fatal("latest folds were not saved")
+	}
+	_, quit = app.Update(secondSave())
+	if quit == nil {
+		t.Fatal("quit did not resume after save")
+	}
+	if _, ok := quit().(tea.QuitMsg); !ok {
+		t.Fatal("expected quit")
+	}
+
+	restored := newDownloadsModel(app)
+	restored.restore()
+	if len(restored.tree) != 4 || !restored.collapsed[id]["Season 01/Extras"] {
+		t.Fatalf("restored folds = %v, tree = %+v", restored.collapsed, restored.tree)
+	}
+	app.downloads = restored
+	m = &app.downloads
+	m.pane = paneFiles
+	m.treeCursor = 0
+	_, save := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app.Update(save())
+	restored = newDownloadsModel(app)
+	restored.restore()
+	if len(restored.tree) != 6 || restored.collapsed[id]["Season 01"] || !restored.collapsed[id]["Season 01/Extras"] {
+		t.Fatalf("expanded parent lost nested fold: %+v", restored.tree)
+	}
+	// Jumping to a file also persists its opened ancestors.
+	app.downloads = restored
+	m = &app.downloads
+	file := m.files[0]
+	m.focusFile(id, &file)
+	app.Update(m.saveFolds()())
+	folders, err := database.CollapsedDirs()
+	if err != nil || len(folders[id]) != 0 {
+		t.Fatalf("revealed folders = %v, %v", folders, err)
+	}
+}
+
+func TestFoldSaveFailureKeepsChangesForRetry(t *testing.T) {
+	app, database, id := folderTreeApp(t)
+	m := &app.downloads
+	app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	// Report a failed write without executing it, then retry on quit.
+	_, cmd := app.Update(foldsSavedMsg{folders: map[int64][]string{id: {"Season 01"}}, err: fmt.Errorf("write failed")})
+	if cmd != nil || m.foldSaving || m.foldQuitting || !m.noticeErr || !m.foldDirty[id] {
+		t.Fatalf("failed save was not retained: %+v", m)
+	}
+	_, save := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	_, quit := app.Update(save())
+	if quit == nil {
+		t.Fatal("retry did not finish quitting")
+	}
+	folders, err := database.CollapsedDirs()
+	if err != nil || !folders[id]["Season 01"] {
+		t.Fatalf("retry = %v, %v", folders, err)
 	}
 }
