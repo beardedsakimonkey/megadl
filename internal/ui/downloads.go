@@ -1190,7 +1190,7 @@ func openInMPV(paths []string, shuffle bool) (func() error, error) {
 	if bin == "" {
 		return nil, errors.New("mpv executable not found")
 	}
-	args := []string{}
+	args := []string{"--save-position-on-quit"}
 	if shuffle {
 		args = append(args, "--shuffle")
 	}
