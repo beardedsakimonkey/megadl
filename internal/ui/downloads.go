@@ -856,10 +856,6 @@ func (m *downloadsModel) startDelete() {
 		return
 	}
 	dl := m.rows[m.cursor]
-	if dl.ID == m.app.eng.ActiveID() {
-		m.setNotice("stop the download before deleting it")
-		return
-	}
 	m.app.del = newDeleteModel(m.app, dl)
 }
 

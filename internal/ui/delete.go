@@ -21,14 +21,30 @@ type deleteModel struct {
 	// starts out wider than the terminal.
 	width  int
 	errMsg string
+	busy   bool
 }
 
 func newDeleteModel(app *App, dl *db.Download) *deleteModel {
 	return &deleteModel{app: app, dl: dl, width: modalContentWidth(app.width, modalWidth)}
 }
 
+type deleteFinishedMsg struct{ err error }
+
 // update returns nil to close the modal.
 func (m *deleteModel) update(msg tea.Msg) (*deleteModel, tea.Cmd) {
+	if result, ok := msg.(deleteFinishedMsg); ok {
+		m.busy = false
+		if result.err != nil {
+			m.errMsg = result.err.Error()
+			return m, nil
+		}
+		m.app.downloads.reload()
+		m.app.downloads.setNotice("deleted " + m.dl.Name)
+		return nil, nil
+	}
+	if m.busy {
+		return m, nil
+	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -37,13 +53,9 @@ func (m *deleteModel) update(msg tea.Msg) (*deleteModel, tea.Cmd) {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "enter", "y", "Y", "d":
-		if err := m.apply(); err != nil {
-			m.errMsg = err.Error()
-			return m, nil
-		}
-		m.app.downloads.reload()
-		m.app.downloads.setNotice("deleted " + m.dl.Name)
-		return nil, nil
+		m.busy = true
+		m.errMsg = ""
+		return m, func() tea.Msg { return deleteFinishedMsg{err: m.apply()} }
 	}
 	// anything else cancels: the destructive half needs a deliberate key
 	return nil, nil
@@ -53,10 +65,7 @@ func (m *deleteModel) update(msg tea.Msg) (*deleteModel, tea.Cmd) {
 // The disk goes first so a failure there leaves the database describing what
 // is actually on disk.
 func (m *deleteModel) apply() error {
-	if err := m.deleteFromDisk(); err != nil {
-		return err
-	}
-	return m.app.db.DeleteDownload(m.dl.ID)
+	return m.app.eng.DeleteDownload(m.dl.ID, m.deleteFromDisk)
 }
 
 // deleteFromDisk removes a download's destination, which is its folder for a
@@ -84,6 +93,9 @@ func (m *deleteModel) deleteFromDisk() error {
 }
 
 func (m *deleteModel) help() string {
+	if m.busy {
+		return "stopping and deleting…"
+	}
 	return renderShortcuts(
 		shortcut{keys: []string{"y/⏎"}, label: "delete"},
 		shortcut{keys: []string{"esc"}, label: "cancel"},
@@ -99,6 +111,9 @@ func (m *deleteModel) view() string {
 	body := truncateMiddle(m.dl.Name, w) + "\n\n" +
 		styleWarn.Render(wrap("this deletes the "+noun+" from disk:", w)) + "\n" +
 		styleDim.Render(truncateMiddle(m.dl.DestPath, w))
+	if m.busy {
+		body += "\n\n" + styleDim.Render(wrap("stopping and deleting…", w))
+	}
 	if m.errMsg != "" {
 		body += "\n\n" + styleError.Render(wrap(m.errMsg, w))
 	}

@@ -83,6 +83,7 @@ func (r RetryWait) Remaining() time.Duration {
 type active struct {
 	id      int64
 	proc    mega.Proc
+	done    chan struct{}    // closed after all process events are consumed
 	sizes   map[string]int64 // local path -> size
 	doneSet map[string]bool  // local paths already done/skipped
 	handles map[string]bool  // node handles selected for this process
@@ -145,6 +146,8 @@ type Engine struct {
 	// again; default flushInterval.
 	LockRetry time.Duration
 
+	operation   sync.Mutex // serializes starting and deleting downloads
+	deleting    bool       // keeps the queue lock held through deletion
 	mu          sync.Mutex
 	act         *active
 	restart     *restarting // set only between a requeue's two processes
@@ -274,6 +277,8 @@ func (e *Engine) Run(ctx context.Context) {
 }
 
 func (e *Engine) maybeStart(ctx context.Context) {
+	e.operation.Lock()
+	defer e.operation.Unlock()
 	e.mu.Lock()
 	blocked := e.act != nil || e.paused
 	e.mu.Unlock()
@@ -285,6 +290,23 @@ func (e *Engine) maybeStart(ctx context.Context) {
 	defer func() {
 		e.mu.Lock()
 		e.restart = nil
+		e.mu.Unlock()
+	}()
+
+	// Only one instance may fetch a library: two processes writing the same
+	// .megatmp partial would interleave their bytes and fail the MAC that
+	// verifies it. Read the queue only after taking the lock so a concurrent
+	// deletion cannot leave us starting a download from stale records.
+	// An empty queue releases the lock before returning.
+	if !e.acquire() {
+		return
+	}
+
+	defer func() {
+		e.mu.Lock()
+		if e.act == nil {
+			e.release()
+		}
 		e.mu.Unlock()
 	}()
 
@@ -313,15 +335,6 @@ func (e *Engine) maybeStart(ctx context.Context) {
 		return
 	}
 
-	// Only one instance may fetch a library: two processes writing the same
-	// .megatmp partial would interleave their bytes and fail the MAC that
-	// verifies it, throwing away both their work. The lock is taken here, with
-	// something to run, rather than held from startup — an instance sitting on
-	// a paused or empty queue has no claim on it.
-	if !e.acquire() {
-		return
-	}
-
 	args := mega.DownloadArgs{URL: dl.URL, Path: dl.DestPath}
 	if dl.LinkType == "folder" {
 		args.SelectHandles = handles
@@ -329,6 +342,7 @@ func (e *Engine) maybeStart(ctx context.Context) {
 
 	a := &active{
 		id:      dl.ID,
+		done:    make(chan struct{}),
 		sizes:   map[string]int64{},
 		doneSet: map[string]bool{},
 		handles: map[string]bool{},
@@ -365,6 +379,7 @@ func (e *Engine) maybeStart(ctx context.Context) {
 }
 
 func (e *Engine) consume(a *active) {
+	defer close(a.done)
 	for ev := range a.proc.Events() {
 		e.mu.Lock()
 		switch ev := ev.(type) {
@@ -518,7 +533,9 @@ func (e *Engine) finishLocked(a *active, exitErr error) {
 	// Nothing is being written here any more, so the library goes back on
 	// offer. The Kick below asks for it straight back when there is more to
 	// fetch, which is why an instance draining a queue keeps hold of it.
-	e.release()
+	if !e.deleting {
+		e.release()
+	}
 	e.Kick()
 }
 
@@ -571,6 +588,53 @@ func (e *Engine) Dequeue(id int64) {
 	}
 	e.mu.Unlock()
 	e.notify()
+}
+
+// DeleteDownload stops the selected transfer, waits for its events to drain,
+// and removes its files and records while holding the library lock.
+// Call from a background command: stopping and disk removal can take time.
+func (e *Engine) DeleteDownload(id int64, removeFiles func() error) error {
+	e.operation.Lock()
+	defer e.operation.Unlock()
+	e.mu.Lock()
+	e.deleting = true
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		e.deleting = false
+		if e.act == nil {
+			e.release()
+		}
+		e.mu.Unlock()
+		e.Kick()
+		e.notify()
+	}()
+
+	if !e.acquire() {
+		return fmt.Errorf("another instance is downloading; stop it before deleting")
+	}
+	if err := e.db.SetDownloadQueued(id, false); err != nil {
+		return err
+	}
+
+	e.mu.Lock()
+	var done <-chan struct{}
+	if e.act != nil && e.act.id == id {
+		e.act.stopping = true
+		e.act.proc.Stop()
+		done = e.act.done
+	}
+	if e.restart != nil && e.restart.id == id {
+		e.restart = nil
+	}
+	e.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+	if err := removeFiles(); err != nil {
+		return err
+	}
+	return e.db.DeleteDownload(id)
 }
 
 // RetryNow cuts short the backoff the active download is waiting out, so the

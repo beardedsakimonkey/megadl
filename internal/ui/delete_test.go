@@ -59,7 +59,7 @@ func TestDeleteConfirmedRemovesTheFolderFromDiskAndTheLibrary(t *testing.T) {
 	app, database, dest := deleteTestApp(t)
 	openDelete(t, app)
 
-	typeKeys(app, "y")
+	confirmDelete(t, app)
 
 	if app.del != nil {
 		t.Fatal("delete dialog is still open")
@@ -117,7 +117,7 @@ func TestDeleteRemovesAFileLinkPartial(t *testing.T) {
 	app.downloads.reload()
 	openDelete(t, app)
 
-	typeKeys(app, "y")
+	confirmDelete(t, app)
 
 	if _, err := os.Stat(tmp); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("os.Stat(%q) err = %v, want not-exist", tmp, err)
@@ -130,7 +130,7 @@ func TestDeleteKeepsTheLinkInTheAddlinkHistory(t *testing.T) {
 	app, _, _ := deleteTestApp(t)
 	openDelete(t, app)
 
-	typeKeys(app, "y")
+	confirmDelete(t, app)
 
 	m := newAddlinkModel(app)
 	m.updateKey(tea.KeyMsg{Type: tea.KeyUp})
@@ -175,4 +175,14 @@ func TestDeleteDialogOpensNoWiderThanTheTerminal(t *testing.T) {
 		assertFitsWidth(t, dialog.view(), min(width, modalWidth+styleModal.GetHorizontalFrameSize()),
 			"delete dialog")
 	}
+}
+
+// Run the background command and deliver its result as Bubble Tea does.
+func confirmDelete(t *testing.T, app *App) {
+	t.Helper()
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil || app.del == nil || !app.del.busy {
+		t.Fatal("confirmation did not start background deletion")
+	}
+	app.Update(cmd())
 }
